@@ -3152,6 +3152,12 @@ def apply_theme():
         box-shadow: inset 0 0 0 1px rgba(232, 184, 109, 0.12), 0 0 16px rgba(196, 22, 28, 0.16);
     }
     .cyber-link-btn.artist:hover { border-color: #e8b86d; color: #f6e2bc !important; }
+    .cyber-link-btn.youtube {
+        border-color: rgba(248, 113, 113, 0.65);
+        background: linear-gradient(155deg, rgba(69, 10, 10, 0.72), rgba(127, 29, 29, 0.55));
+        box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.16), 0 0 16px rgba(196, 22, 28, 0.2);
+    }
+    .cyber-link-btn.youtube:hover { border-color: #f87171; color: #fecaca !important; }
     .cyber-link-btn.report {
         border-color: rgba(246, 226, 188, 0.45);
         background: rgba(196, 22, 28, 0.22);
@@ -3848,6 +3854,7 @@ def render_sidebar():
                 <a class="cyber-link-btn" href="https://www.almondbagger.com/" target="_blank" rel="noopener noreferrer">🌐 会社公式HP (ALMOND BAGGER)</a>
                 <a class="cyber-link-btn" href="https://map.almondbagger.com/" target="_blank" rel="noopener noreferrer">🗺️ ロケ地図ツクール</a>
                 <a class="cyber-link-btn artist" href="https://www.tunecore.co.jp/artists?id=1169004" target="_blank" rel="noopener noreferrer">🎵 TuneCore (YUMITA Official)</a>
+                <a class="cyber-link-btn youtube" href="https://youtube.com/@akbb_a.i.kuchipakubandbrothers?si=pk7gAKZ_JMLz1q_2" target="_blank" rel="noopener noreferrer">🎬 弊社制作MV（YouTube）</a>
                 <a class="cyber-link-btn report" href="mailto:info@almondbagger.com?subject=%E3%80%90YUMI-CHA%E6%94%B9%E5%96%84%E8%A6%81%E6%9C%9B%E3%80%91">📩 要望・不具合を報告</a>
             </div>
             """,
@@ -3990,7 +3997,6 @@ def render_overview():
         """,
         unsafe_allow_html=True,
     )
-    render_share()
 
 
 def main():
