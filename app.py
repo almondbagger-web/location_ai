@@ -2038,56 +2038,136 @@ def prefer_tokyo(rows: list[dict]) -> list[dict]:
 MASTER_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 
 
-def master_location_rows() -> list[dict]:
-    import time
+def csv_cell(cells: list[str], index: int) -> str:
+    if index < 0 or index >= len(cells):
+        return ""
+    return str(cells[index] or "").strip()
 
-    cached = list(MASTER_CACHE.get("rows") or [])
-    if cached and time.monotonic() - float(MASTER_CACHE.get("at") or 0) < 1800:
-        return cached
+
+def read_csv_table(url: str) -> list[list[str]]:
+    import csv
+    import io
+    import urllib.request
+
     try:
-        curated = open_master_worksheet()
-        if curated is None:
-            return cached
-        worksheet = curated.spreadsheet.worksheet("ロケ地")
-        rows = []
-        for cells in worksheet.get_all_values()[1:]:
-            name, address, condition, scene, genre = (cells + ["", "", "", "", ""])[:5]
-            if not str(name).strip():
+        request = urllib.request.Request(url, headers={"User-Agent": "YUMI-CHA/1.0"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = response.read(12_000_000)
+            kind = str(response.headers.get("Content-Type") or "")
+        if payload.lstrip()[:1] == b"<" or ("html" in kind.lower() and "csv" not in kind.lower()):
+            return []
+        text = payload.decode("utf-8-sig", errors="replace")
+        if text.lstrip()[:1] == "<":
+            return []
+        return list(csv.reader(io.StringIO(text)))
+    except Exception:
+        return []
+
+
+def refresh_csv_bundle() -> None:
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = time.monotonic()
+    if (SHEET_CACHE.get("rows") or MASTER_CACHE.get("rows")) and now - float(SHEET_CACHE.get("at") or 0) < 1800:
+        return
+    sheet_table: list[list[str]] = []
+    master_table: list[list[str]] = []
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sheet_job = pool.submit(read_csv_table, SHEET1_CSV)
+            master_job = pool.submit(read_csv_table, MASTER_CSV)
+            sheet_table = sheet_job.result(timeout=16) or []
+            master_table = master_job.result(timeout=16) or []
+    except Exception:
+        sheet_table, master_table = [], []
+    sheet_rows_parsed: list[dict] = []
+    for cells in sheet_table[1:]:
+        try:
+            name = csv_cell(cells, 1)
+            if not name or name == "名称":
                 continue
-            label = str(scene or "").strip() or "汎用撮影"
-            rows.append(
+            scene_cell = csv_cell(cells, 6)
+            conditions, specs = split_facility_notes(csv_cell(cells, 3))
+            sheet_rows_parsed.append(
                 {
-                    "location_name": str(name).strip(),
-                    "address": str(address).strip(),
-                    "accept_terms": str(condition or "").strip(),
-                    "condition": str(condition or "").strip(),
+                    "location_name": name,
+                    "address": csv_cell(cells, 2),
+                    "works_title": "",
+                    "scene": abstract_scene(scene_cell) if scene_cell else "",
+                    "accept_terms": conditions,
+                    "condition": conditions,
+                    "facility_spec": specs,
+                    "detail_text": "",
+                    "site_name": csv_cell(cells, 0) or "ロケ地",
+                }
+            )
+        except Exception:
+            continue
+    master_rows_parsed: list[dict] = []
+    for cells in master_table[1:]:
+        try:
+            name = csv_cell(cells, 0)
+            if not name or name == "ロケ地名":
+                continue
+            label = csv_cell(cells, 3) or "汎用撮影"
+            condition = csv_cell(cells, 2)
+            master_rows_parsed.append(
+                {
+                    "location_name": name,
+                    "address": csv_cell(cells, 1),
+                    "accept_terms": condition,
+                    "condition": condition,
                     "scene": label,
                     "scenes_category": label,
                     "works_title": "",
                     "detail_text": "",
-                    "site_name": str(genre or "").strip() or "ロケ地",
+                    "facility_spec": "",
+                    "site_name": csv_cell(cells, 4) or "ロケ地",
                 }
             )
-        MASTER_CACHE["at"] = time.monotonic()
-        MASTER_CACHE["rows"] = rows
-        return rows
+        except Exception:
+            continue
+    if sheet_rows_parsed or master_rows_parsed:
+        SHEET_CACHE["rows"] = sheet_rows_parsed
+        SHEET_CACHE["at"] = now
+        MASTER_CACHE["rows"] = master_rows_parsed
+        MASTER_CACHE["at"] = now
+
+
+def master_location_rows() -> list[dict]:
+    try:
+        refresh_csv_bundle()
     except Exception:
-        return cached
+        pass
+    return list(MASTER_CACHE.get("rows") or [])
 
 
 def search_master_locations(query: str, limit: int = 0) -> list[dict]:
-    terms = scene_search_terms(query) or sheet_keywords(query)
-    if not terms:
+    scene_terms = scene_search_terms(query)
+    expanded = [] if scene_terms else category_terms(query)
+    terms = scene_terms or sheet_keywords(query)
+    if not terms and not expanded:
         return []
+    school = mentions_category(query, "学校")
     ranked = []
     for row in master_location_rows():
         if not acceptable_public_row(row):
             continue
+        name = str(row.get("location_name") or "")
+        address = str(row.get("address") or "")
         blob = "".join(str(row.get(key) or "") for key in ("location_name", "address", "scene", "scenes_category", "site_name"))
-        if not any(term in blob for term in terms):
-            continue
-        score = sum(2 for term in terms if term in blob)
-        if "東京" in str(row.get("address") or ""):
+        if expanded:
+            if not any(term in name for term in expanded):
+                continue
+            if school and any(noise in name for noise in ("公園", "道路", "通り", "交差点", "歩道橋")):
+                continue
+            score = sum(2 for term in expanded if term in name)
+        else:
+            if not any(term in blob for term in terms):
+                continue
+            score = sum(2 for term in terms if term in blob)
+        if "東京" in address:
             score += 3
         ranked.append((score, row))
     ranked.sort(key=lambda item: item[0], reverse=True)
@@ -2237,8 +2317,85 @@ def detail_reply(user_text: str, messages: list[dict] | None = None) -> tuple[st
         condition = mask_public(str(head.get("condition") or head.get("accept_terms") or "")) or "要相談"
         spoken = f"{name}（{address}）の撮影受入は{condition}です。向いているシーンは{scene}です。搬入や夜間の細目は、施設ごとの事前申請で確認します。"
     if not spoken:
-        return "", False
+        spoken = "撮影受入は要相談です。土日祝、夜間、搬入は、施設ごとの事前申請で確認します。"
     return f"<div class='bubble'>{rich_text(spoken)}</div>", True
+
+
+def model_place_rows(text: str) -> list[dict]:
+    raw = str(text or "")
+    rows: list[dict] = []
+    matched = re.search(r"\[\s*\{[\s\S]*\}\s*\]", raw)
+    if matched:
+        try:
+            data = json.loads(matched.group(0))
+        except Exception:
+            data = []
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("施設名") or item.get("location_name") or "").strip()
+                address = str(item.get("address") or item.get("住所") or "").strip()
+                scene = str(item.get("scene") or item.get("シーン") or "").strip()
+                if name:
+                    rows.append(
+                        {
+                            "location_name": name,
+                            "address": address,
+                            "scene": scene,
+                            "scenes_category": scene,
+                            "works_title": "",
+                            "site_name": "kanto-public",
+                        }
+                    )
+    if rows:
+        return rows
+    for line in raw.splitlines():
+        body = re.sub(r"^[-・*]\s*", "", line.strip())
+        found = re.match(r"(.+?)[:：](.+?)【(.+?)】", body)
+        if not found:
+            continue
+        rows.append(
+            {
+                "location_name": found.group(1).strip(),
+                "address": found.group(2).strip(),
+                "scene": found.group(3).strip(),
+                "scenes_category": found.group(3).strip(),
+                "works_title": "",
+                "site_name": "kanto-public",
+            }
+        )
+    if rows:
+        return rows
+    return parse_location_lines(raw)
+
+
+def gemini_location_rows(user_text: str, messages: list[dict] | None) -> list[dict]:
+    import threading
+
+    task = (
+        "スプレッドシートが空だったときの補完。"
+        "東京を優先し、関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）の実在施設を10件以上、できるだけ多く書く。"
+        "1件につき1行。形式は「・施設名：都道府県市区町村【シーン】」。"
+        "JSON、作品名、撮影日、俳優名、URL、電話番号は書かない。個人の自宅は出さない。"
+        "学校なら学校・廃校・校舎、病院なら医院・病棟、オフィスならビル・会議室。"
+    )
+    box = {"rows": []}
+
+    def run() -> None:
+        try:
+            spoken = ask_gemini(user_text, messages or [], None, None, "", task)
+            box["rows"] = model_place_rows(spoken)
+        except Exception:
+            box["rows"] = []
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(20)
+    return list(box["rows"] or [])
+
+
+RETRY_LIST_HTML = "<ul class='line-list'><li>・候補を読み直しています。施設名を添えて、もう一度送ってください。</li></ul>"
 
 
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
@@ -2248,33 +2405,45 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
         pass
     try:
         if is_detail_question(user_text):
-            return detail_reply(user_text, messages)
+            reply, as_html = detail_reply(user_text, messages)
+            if reply:
+                return reply, as_html
+            return f"<div class='bubble'>{rich_text('撮影受入は要相談です。土日祝、夜間、搬入は、施設ごとの事前申請で確認します。')}</div>", True
         more = is_more_request(user_text)
         query = followup_query(user_text) if more else user_text
         exclude = shown_location_keys(more)
         rows = gather_location_rows(query, limit=0, exclude_keys=exclude) if str(query or "").strip() else []
         listing = spot_cards_html(rows)
+        if not listing:
+            rows = gemini_location_rows(user_text, messages)
+            listing = spot_cards_html(rows)
         try:
-            st.session_state.last_match_count = len(rows) if listing else 0
+            st.session_state.last_match_count = len(rows) if listing and "読み直して" not in listing else 0
         except Exception:
             pass
-        if rows and listing:
+        if rows and listing and "読み直して" not in listing:
             remember_locations(rows, query, more)
         if not listing:
-            return "", False
+            try:
+                st.session_state.last_match_count = 0
+            except Exception:
+                pass
+            return RETRY_LIST_HTML, True
         return listing, True
     except Exception:
         try:
             st.session_state.last_match_count = 0
         except Exception:
             pass
-        return "", False
+        return RETRY_LIST_HTML, True
 
 
 SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 
 
 SPREADSHEET_ID = "1wqzKFN5GqvLjURzJNZ_ypNOC1jaYfYlVj6eDlAcUH44"
+SHEET1_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=0"
+MASTER_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=2043901308"
 QUERY_SHEET_NAME = "未解決クエリ"
 QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
 
@@ -2336,6 +2505,7 @@ def ensure_query_sheet(book):
 
 
 def record_chat_query(query: str, reply: str) -> None:
+    import threading
     import time
 
     text = re.sub(r"\s+", " ", str(query or "")).strip()
@@ -2353,62 +2523,34 @@ def record_chat_query(query: str, reply: str) -> None:
         unresolved = True
     if is_detail_question(text) and visible.strip() and not EMPTY_HIT_RE.search(visible):
         unresolved = False
-    book = open_master_book()
-    if book is None:
-        return
-    worksheet = ensure_query_sheet(book)
-    worksheet.append_row(
-        [
-            text[:500],
-            "true" if unresolved else "false",
-            "【未解決】" if unresolved else "",
-            "" if counted is None else str(counted),
-            time.strftime("%Y-%m-%d %H:%M"),
-            "open" if unresolved else "resolved",
-        ],
-        value_input_option="RAW",
-    )
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    payload = [
+        text[:500],
+        "true" if unresolved else "false",
+        "【未解決】" if unresolved else "",
+        "" if counted is None else str(counted),
+        stamp,
+        "open" if unresolved else "resolved",
+    ]
+
+    def write_row() -> None:
+        try:
+            book = open_master_book()
+            if book is None:
+                return
+            ensure_query_sheet(book).append_row(payload, value_input_option="RAW")
+        except Exception:
+            return
+
+    threading.Thread(target=write_row, daemon=True).start()
 
 
 def sheet_rows() -> list[dict]:
-    import time
-
-    cached = SHEET_CACHE.get("rows") or []
-    if cached and time.monotonic() - float(SHEET_CACHE.get("at") or 0) < 300:
-        return list(cached)
     try:
-        worksheet = open_master_worksheet()
-        if worksheet is None:
-            return []
-        rows = []
-        for cells in worksheet.get_all_values()[1:]:
-            category, name, area, summary = (cells + ["", "", "", ""])[:4]
-            scene_cell = cells[6].strip() if len(cells) > 6 else ""
-            if not str(name).strip():
-                continue
-            conditions, specs = split_facility_notes(str(summary or ""))
-            rows.append(
-                {
-                    "location_name": str(name).strip(),
-                    "address": str(area).strip(),
-                    "works_title": "",
-                    "scene": abstract_scene(scene_cell) if scene_cell else "",
-                    "accept_terms": conditions,
-                    "facility_spec": specs,
-                    "detail_text": " / ".join(
-                        part for part in (
-                            f"利用条件: {conditions}" if conditions else "",
-                            f"設備: {specs}" if specs else "",
-                        ) if part
-                    ),
-                    "site_name": str(category).strip(),
-                }
-            )
-        SHEET_CACHE["at"] = time.monotonic()
-        SHEET_CACHE["rows"] = rows
-        return rows
+        refresh_csv_bundle()
     except Exception:
-        return list(cached)
+        pass
+    return list(SHEET_CACHE.get("rows") or [])
 
 
 def sheet_keywords(query: str) -> list[str]:
@@ -2417,7 +2559,10 @@ def sheet_keywords(query: str) -> list[str]:
     except Exception:
         terms = []
     extra = re.findall(r"[一-龥ァ-ヶーA-Za-z0-9]{2,}", query or "")
-    skip = {"とは", "誰です", "教えて", "ください", "について", "詳しく", "株式会社", "代表", "経歴", "実績"}
+    skip = {
+        "とは", "誰です", "教えて", "ください", "について", "詳しく", "株式会社", "代表", "経歴", "実績",
+        "撮影", "できる", "場所", "ロケ", "ロケ地", "候補", "お願い", "どこ", "ある", "ない", "シーン", "施設",
+    }
     found = []
     for term in list(terms) + extra:
         if term in skip or len(term) < 2 or term in found:
@@ -2777,8 +2922,8 @@ def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
     try:
         return ledger_fallback(user_text)
     except Exception:
-        if is_location_query(user_text):
-            return "", False
+        if is_location_query(user_text) or is_scene_search(user_text):
+            return RETRY_LIST_HTML, True
         return "<div class='bubble'>台帳には、この言葉に一致する記録がまだありません。</div>", True
 
 
@@ -3668,6 +3813,8 @@ def render_chat(avatar_b64: str):
                 record_chat_query(last_user, reply)
             except Exception:
                 pass
+        if not reply and (is_location_query(last_user) or is_scene_search(last_user)):
+            reply, as_html = RETRY_LIST_HTML, True
         if reply:
             st.session_state.messages.append({"role": "assistant", "content": reply, "html": as_html})
         st.rerun()
