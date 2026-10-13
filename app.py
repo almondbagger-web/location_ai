@@ -35,8 +35,10 @@ SYSTEM_INSTRUCTION = """
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
 ・ロケ地相談時：架空の場所を捏造せず、与えられた実データ（過去実績やDB情報）をベースに『なぜここが条件に合うか』のプロの視点を添えて案内する。実データが無い特徴は断定しない。
 ・実データがあるとき：先に推薦コメントを書き、その下へ実データだけのMarkdown箇条書きを置く。各項目は名前、所在地、実績。
-・電話番号、メールアドレス、個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
+・電話番号、メールアドレス、私的な個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
 ・URL、出典は書かない。実データにない日数、料金、最低注文数は作らない。
+・代表：YUMITA（弓田）。株式会社ALMONDBAGGER 代表取締役。映画・ドラマの制作部として20年以上、ロケ手配、許認可、香盤、予算、現場統括を担う。八王子フィルムコミッションと連携し、AI Previs と AI VFX も手がける。アーティストとしても音楽活動をしている。肩書きの「日本一の制作部（自称）」「天才AIクリエイター（自称）」は本人の自称。
+・「YUMITAとは誰か」「弓田とは誰か」と聞かれたら、この代表情報だけを使い、制作部・代表としての経歴と実績を短く具体的に答える。私的な連絡先や電話番号は出さない。
 """
 
 MIC_HTML = """
@@ -99,7 +101,7 @@ def is_manual_query(text: str) -> bool:
 PHONE_RE = re.compile(r"0\d{1,4}[-(]?\d{1,4}[-)]?\d{3,4}")
 EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 MENTION_RE = re.compile(r"[@＠]\s*(?:氏名|弓田|山田|[一-龥]{2,4})")
-STAFF_NAME_RE = re.compile(r"弓田\s*悠太?")
+STAFF_NAME_RE = re.compile(r"弓田\s*悠太")
 SCHEDULE_FACILITY_RE = re.compile(r"月日|号館|お願い|注意|階(?!段)")
 PERMIT_LEAK_RE = re.compile(r"[^。\n]*(?:道路使用|申請手順|申請マニュアル|許可台帳|中日は|中日\d)[^。\n]*[。]?")
 SAFE_LINE = "アーカイブ書庫より安全に候補を抽出中です。時間を置いて再試行してください。"
@@ -1125,9 +1127,27 @@ def shops_to_text(shops, shop_order_fields, query: str = "") -> str:
     return "\n\n".join(blocks)
 
 
+def gemini_api_key() -> str:
+    secret = ""
+    try:
+        secret = str(st.secrets.get("GEMINI_API_KEY", "") or "")
+    except Exception:
+        secret = ""
+    return (secret or os.getenv("GEMINI_API_KEY") or "").strip()
+
+
+def gemini_model_name() -> str:
+    secret = ""
+    try:
+        secret = str(st.secrets.get("GEMINI_MODEL", "") or "")
+    except Exception:
+        secret = ""
+    return (secret or os.getenv("GEMINI_MODEL") or "").strip()
+
+
 def model_chain() -> list[str]:
     chain = ["gemini-flash-lite-latest"]
-    configured = os.getenv("GEMINI_MODEL", "").strip()
+    configured = gemini_model_name()
     if configured and configured not in chain:
         chain.append(configured)
     return chain
@@ -1374,24 +1394,124 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
         return "", False
 
 
-def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | None, mime: str | None) -> tuple[str, bool]:
+SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
+
+
+def sheet_rows() -> list[dict]:
+    import time
+
+    cached = SHEET_CACHE.get("rows") or []
+    if cached and time.monotonic() - float(SHEET_CACHE.get("at") or 0) < 300:
+        return list(cached)
+    raw = ""
     try:
-        return compose_reply(user_text, messages, image_bytes, mime)
+        raw = str(st.secrets.get("GCP_SA_KEY", "") or "")
     except Exception:
+        raw = ""
+    raw = (raw or os.getenv("GCP_SA_KEY") or "").strip()
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        if raw:
+            creds = Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
+        elif (BASE / "google-credentials.json").is_file():
+            creds = Credentials.from_service_account_file(str(BASE / "google-credentials.json"), scopes=scopes)
+        else:
+            return []
+        book = gspread.authorize(creds).open("YUMI-CHA_ロケ地・お弁当マスター")
         try:
-            if is_founder_query(user_text):
-                return founder_card_html(), True
-            if is_bento_query(user_text):
-                return bento_reply(user_text), False
-            if is_desk_query(user_text):
-                return desk_reply(user_text, messages)
-            if is_conversation_request(user_text):
-                return conversation_reply(user_text, messages, image_bytes, mime), False
-            if is_location_query(user_text):
-                return location_reply(user_text)
+            worksheet = book.worksheet("シート1")
+        except gspread.WorksheetNotFound:
+            worksheet = book.sheet1
+        rows = []
+        for cells in worksheet.get_all_values()[1:]:
+            category, name, area, summary = (cells + ["", "", "", ""])[:4]
+            if not str(name).strip():
+                continue
+            rows.append(
+                {
+                    "location_name": str(name).strip(),
+                    "address": str(area).strip(),
+                    "works_title": str(summary).strip() or str(category).strip(),
+                    "detail_text": "",
+                    "site_name": str(category).strip(),
+                }
+            )
+        SHEET_CACHE["at"] = time.monotonic()
+        SHEET_CACHE["rows"] = rows
+        return rows
+    except Exception:
+        return list(cached)
+
+
+def sheet_keywords(query: str) -> list[str]:
+    try:
+        terms = search_terms(query)
+    except Exception:
+        terms = []
+    extra = re.findall(r"[一-龥ァ-ヶーA-Za-z0-9]{2,}", query or "")
+    skip = {"とは", "誰です", "教えて", "ください", "について", "詳しく", "株式会社", "代表", "経歴", "実績"}
+    found = []
+    for term in list(terms) + extra:
+        if term in skip or len(term) < 2 or term in found:
+            continue
+        found.append(term)
+    return found[:6]
+
+
+def search_sheet_keywords(query: str, limit: int = 8) -> list[dict]:
+    terms = sheet_keywords(query)
+    if not terms:
+        return []
+    ranked = []
+    for row in sheet_rows():
+        blob = "".join(str(row.get(key) or "") for key in ("location_name", "address", "works_title", "site_name"))
+        score = sum(1 for term in terms if term in blob)
+        if is_bento_query(query) and not re.search(r"弁当|ケータリング|仕出し|ロケ弁", blob):
+            continue
+        if score:
+            ranked.append((score, row))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [row for _, row in ranked[:limit]]
+
+
+def ledger_fallback(user_text: str) -> tuple[str, bool]:
+    if is_founder_query(user_text):
+        return founder_card_html(), True
+    rows: list[dict] = []
+    try:
+        rows = search_sheet_keywords(user_text, limit=8)
+    except Exception:
+        rows = []
+    if not rows:
+        try:
+            rows = search_local_locations(user_text, limit=8)
         except Exception:
-            pass
-        return "", False
+            rows = []
+    listing = spot_cards_html(rows)
+    if listing:
+        lead = "台帳から、言葉が一致したロケ地・お弁当の記録です。"
+        return f"<div class='bubble'>{lead}</div>{listing}", True
+    return "<div class='bubble'>台帳には、この言葉に一致する記録がまだありません。</div>", True
+
+
+def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | None, mime: str | None) -> tuple[str, bool]:
+    reply, as_html = "", False
+    try:
+        reply, as_html = compose_reply(user_text, messages, image_bytes, mime)
+    except Exception:
+        reply, as_html = "", False
+    if reply:
+        return reply, as_html
+    try:
+        return ledger_fallback(user_text)
+    except Exception:
+        return "<div class='bubble'>台帳には、この言葉に一致する記録がまだありません。</div>", True
 
 
 def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | None, mime: str | None) -> tuple[str, bool]:
@@ -1399,7 +1519,16 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
 
     bento = is_bento_query(user_text)
     if is_founder_query(user_text):
-        reply = founder_card_html()
+        spoken = ask_gemini(
+            user_text,
+            messages,
+            image_bytes,
+            mime,
+            "",
+            "代表YUMITA（弓田）と株式会社ALMONDBAGGERの公開情報だけを使い、経歴と実績を3文以内で答える。電話番号は出さない。",
+        )
+        card = founder_card_html()
+        reply = f"<div class='bubble'>{rich_text(spoken)}</div>{card}" if spoken else card
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, True
@@ -1892,6 +2021,58 @@ def apply_theme():
         overflow: hidden;
     }
     [data-testid="stChatInput"] { display: none; }
+    @media (max-width: 768px) {
+        .block-container { padding-left: 12px !important; padding-right: 12px !important; padding-bottom: 190px !important; }
+        .catch { font-size: 15px !important; line-height: 1.55; }
+        .ext-row { flex-direction: column; align-items: stretch; width: 100%; }
+        a.ext { width: 100%; min-width: 0; box-sizing: border-box; }
+        .st-key-suggest,
+        .st-key-composer,
+        .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-suggest,
+        .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-composer {
+            left: 10px !important;
+            right: 10px !important;
+            width: auto !important;
+            max-width: none !important;
+            transform: none !important;
+        }
+        .st-key-suggest {
+            bottom: 148px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+        }
+        .st-key-suggest [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            width: max-content !important;
+            min-width: 100%;
+        }
+        .st-key-suggest button { white-space: nowrap !important; width: auto !important; }
+        .st-key-composer { bottom: 10px; border-radius: 22px; padding: 8px; }
+        .st-key-composer [data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            width: 100% !important;
+            gap: 8px !important;
+        }
+        .st-key-composer [data-testid="stHorizontalBlock"] > div:first-child {
+            flex: 1 1 100% !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+        }
+        .st-key-composer [data-testid="stHorizontalBlock"] > div:not(:first-child) {
+            flex: 0 0 48px !important;
+            width: 48px !important;
+            max-width: 48px !important;
+            min-width: 48px !important;
+        }
+        .st-key-composer [data-testid="stTextInput"] input {
+            width: 100% !important;
+            font-size: 16px !important;
+            padding: 0 92px 0 14px !important;
+        }
+    }
     </style>
     """
     st.markdown(css.replace("%%BG%%", background), unsafe_allow_html=True)
@@ -2014,7 +2195,7 @@ def render_sidebar():
 SUGGESTIONS = (
     ("🏢 都内で撮影できるオフィス・会議室", "都内で撮影できるオフィス・会議室"),
     ("🍱 現場で人気のロケ弁・ケータリング", "現場で人気のロケ弁・ケータリング"),
-    ("📄 近隣住民への挨拶文テンプレート", "近隣住民への挨拶文テンプレート"),
+    ("👤 YUMITAって誰？", "YUMITA（弓田）とは誰ですか？株式会社ALMONDBAGGERの代表・制作部としての経歴や実績について詳しく教えてください。"),
     ("💥 爆破・道路封鎖の特殊撮影相談", "爆破・道路封鎖の特殊撮影相談"),
 )
 
@@ -2029,8 +2210,8 @@ def render_suggestions():
         return
     with st.container(key="suggest"):
         cols = st.columns(4, gap="small")
-        for column, (label, query) in zip(cols, SUGGESTIONS):
-            column.button(label, key=f"chip_{query}", on_click=send_suggestion, args=(query,), width="stretch")
+        for index, (column, (label, query)) in enumerate(zip(cols, SUGGESTIONS)):
+            column.button(label, key=f"chip_{index}", on_click=send_suggestion, args=(query,), width="stretch")
 
 
 def render_composer():
@@ -2169,7 +2350,7 @@ def main():
     st.set_page_config(page_title="YUMI-CHA", page_icon=str(AVATAR_PATH), layout="wide", initial_sidebar_state="expanded")
     init_system_tables()
     apply_theme()
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = gemini_api_key()
     if "gemini_client" not in st.session_state:
         try:
             st.session_state.gemini_client = genai.Client(api_key=api_key) if api_key else None
