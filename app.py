@@ -340,7 +340,7 @@ def is_location_query(text: str) -> bool:
 
 
 CRAFT_FOLLOW_RE = re.compile(
-    r"教えて|ください|下さい|出して|見せて|フォーマット|テンプレ|雛形|文面|全文|書いて|お願い"
+    r"教えて|ください|下さい|出して|見せて|フォーマット|テンプレ|雛形|文面|全文|書いて|お願い|詳しく|詳細|続き|もっと|具体"
 )
 GREETING_LETTER = """【ドラマ・映像撮影ロケーションのお願い（近隣挨拶文テンプレ）】
 
@@ -400,19 +400,57 @@ MINDSET_NOTE = """制作部の心得は、現場を止めないことです。
 ・困ったら一人で抱えず、株式会社ALMONDBAGGERの制作へ相談する。"""
 
 
+def station_permit_ready(text: str) -> bool:
+    raw = text or ""
+    if re.search(r"消防|火気|火皿|濡れ毛布", raw):
+        return False
+    try:
+        from permit_lookup import is_permit_query, permit_answer
+    except Exception:
+        return False
+    if not is_permit_query(raw):
+        return False
+    answer = permit_answer(raw) or ""
+    return ("社内台帳" in answer) or ("公園撮影（" in answer)
+
+
 def classify_craft(text: str) -> str:
     raw = text or ""
-    if re.search(r"香盤", raw):
-        return "callsheet"
-    if re.search(r"道路使用|占用", raw):
-        return "road"
-    if re.search(r"心得", raw):
-        return "mindset"
     if re.search(r"近隣.{0,8}挨拶|挨拶文|挨拶状|お願い状|ご挨拶", raw):
-        return "greeting"
-    if re.search(r"テンプレート|テンプレ|フォーマット|雛形|文面|文案", raw):
-        return "greeting"
-    return ""
+        kind = "greeting"
+    elif re.search(r"ギャラ|契約書|仮払|精算|レシート|バレ飯|現場費|請求書|お金|予算", raw):
+        kind = "money"
+    elif re.search(r"道路使用|消防|火気|火皿|濡れ毛布|牽引|河川|土木|森林|届出|許可申請|占用|公園の許可|公園の窓口|公園の管轄", raw):
+        kind = "permit"
+    elif re.search(r"両天|仕込み|宿泊|支度場所|自治会|公民館|近隣対策|挨拶回り", raw):
+        kind = "prep"
+    elif re.search(r"タイムライン|先発|しんがり|指差し|朝のルーティン|朝の準備|点呼|人止め|車止め|制作部の1日|制作進行の1日|1日の流れ|一日の流れ", raw):
+        kind = "timeline"
+    elif re.search(r"配車|免許|レンタカー|車輌|車両|マイクロバス|送迎|終電|8t|8トン", raw):
+        kind = "vehicle"
+    elif re.search(r"演出部|各部|連携|血糊|雨降らし|劇用馬|馬係|子役|事故対応|事故が|SNS|リテラシー|録音部|撮影部|承認欲求", raw):
+        kind = "liaison"
+    elif re.search(r"備品車|南京|荷締め|ウェス|撤収|産廃|献立|アレルギー|差し入れ|賄い|食事手配|食事管理|ロケ飯|ローテ|固形燃料|養生毛布", raw):
+        kind = "camp"
+    elif re.search(r"香盤|日々スケ", raw):
+        kind = "callsheet"
+    elif re.search(r"心得|制作進行の仕事|制作部の仕事", raw):
+        kind = "mindset"
+    elif re.search(r"テンプレート|テンプレ|フォーマット|雛形|文面|文案", raw):
+        kind = "greeting"
+    else:
+        kind = ""
+    if not kind:
+        return ""
+    if kind == "permit" and station_permit_ready(raw):
+        return ""
+    place_like = bool(place_heads(raw) or re.search(r"撮影できる|撮れる場所|ロケ地|ロケ候補", raw))
+    if place_like and kind != "greeting" and not re.search(
+        r"ギャラ|仮払|精算|バレ飯|挨拶文|お願い状|香盤|道路使用|消防|火気|火皿|両天|配車|備品車|撤収|南京|日々スケ|心得|許可申請|仕込み|契約書|レシート",
+        raw,
+    ):
+        return ""
+    return kind
 
 
 def is_craft_followup(text: str) -> bool:
@@ -452,22 +490,138 @@ def craft_kind(user_text: str, messages: list[dict] | None = None) -> str:
     return inherited_craft(messages)
 
 
-def craft_reply(kind: str, messages: list[dict] | None = None) -> tuple[str, bool]:
+MONEY_NOTE = """お金は、預かった瞬間から責任です。
+
+・ギャラは相場を仲間と共有し、かかるコストとして出す。「予算に限りがある」で安易に下げない。可能な範囲を先に置く。
+・備品リースと車輛代は、ギャラと分けて請求できる。請求書には発行日、振込先、インボイス番号、消費税、納品物（制作進行費など）を書く。
+・契約はサインの前に、業務範囲、支払い期日、交通費が込みか実費か、中止時のキャンセル料を読む。
+・現場費は、ベース費と時間外、控室・電気・立会・清掃、ロケハン、仕込み、復旧、近隣対策までフェーズで組む。ロケハンに行く前に組む。
+・制作担当は全体、制作主任は物件、制作進行は移動・食・消耗品。自分が預かる費目は自分で組む。
+・仮払いは用途・金額・返却期限を残し、返却時は現金とレシートを一緒に回収する。
+・レシートの裏には、日付、氏名、部署、用途、宛名を書く。根拠のない出金は精算できない。
+・バレ飯は地方の撮休と移動日。アルコールと嗜好品は外し、上限を先に決める。"""
+PERMIT_NOTE = """許可は、ロケの第一歩です。無断の道路使用はできません。
+
+・道路使用は、所轄警察署の交通課。申請書、図面、使用計画書、車止めと人止めの計画を揃える。原則は撮影の7日前、実務は2週間前。
+・当日は許可証を携帯する。交通と住民への影響を小さくする。
+・公園は窓口が分かれる。国営、都立、市立で担当課が違う。河川と海岸は土木事務所、山林は森林局。
+・火を使う演出、煙、夜間の炎、スモークは、火災と紛らわしい行為として消防へ届ける。火気使用は撮影の3〜7日前が目安で、自治体で違う。
+・操演の火皿は、面で燃えて点火と消火をコントロールする器。設置場所は養生と立入制限。撮影中の小さな火は、粉末消火器でセットを潰さず、濡れ毛布で火元を包んで空気を断つ。消火器は非常時の最終手段。本当の火災やケガは119。
+・公道での牽引撮影は原則できない。私有地、閉鎖した道路、LEDウォールやグリーンバックの合成を先に検討する。"""
+PREP_NOTE = """仕込みは、地域との信頼づくりです。
+
+・近隣挨拶は撮影の1〜2週間前。自治会長など窓口を一本化し、騒音・照明・交通を先に説明する。緊急連絡先を挨拶状に書く。
+・地図には、駐車、搬入、電源の位置と容量、各部の置き場、待機場所を書く。
+・支度場所は公民館、自治会館、空き部屋。夏は冷房と電源容量、冬は暖房。姿見、長机、ハンガーラック、目隠し、延長コードを置く。キャストとスタッフの待機は分ける。
+・宿泊は撮影地からの距離が最優先。スタッフルームは近くに集め、コインランドリー、Wi-Fi、弁当の置き配、早朝深夜の出入りを確認する。
+・両天はりょうてん。晴れと雨の現場を同時に仕込み、バラシのリミットを朝から見て、使わない方のコストを増やさない。"""
+TIMELINE_NOTE = """制作進行の1日は、複数の線路を同時に見る仕事です。
+
+・朝は集合の30分前に入り、点呼、お茶・麦茶・お湯・朝コーヒー、トランシーバーと電動工具の充電、夏は氷、冬は灯油。
+・撮影中は、シーンの工数、俳優の入りと出しの配車、買い出し、搬入路の養生、人止めと車止めを見る。休憩は90分交代で休ませる。
+・現場移動の先発は、駐車、支度、養生、挨拶。殿（しんがり）は、忘れ物、原状復帰、最後の確認。
+・明日の指差しは、配車、弁当の納品と配膳、俳優の入り時間、日々スケにない変更の追記。
+・物件の終了時刻と監督のこだわりがぶつかったら、押す、切る、延ばすのどれかを、感情ではなく計算と根回しで決める。"""
+VEHICLE_NOTE = """配車は、人・車・時間を組む仕事です。
+
+・必要な車は、機材車、美術トラック、マイクロバス、キャスト車、制作備品車、遊撃車、トイレカー、特殊車両。
+・誰が、何時に、どの車で、誰を送るかを1枚にする。終電後のタクシーは、同じ方向をまとめ、遠い人から段階的に出す。
+・免許は車検証と突合する。普通は車両総重量3.5トン未満・最大積載2トン未満、準中型は7.5トン未満・最大積載4.5トン未満、中型8トン限定は総重量8トン未満・最大積載5トン未満。超える車は、その区分の免許がない人に運転させない。
+・レンタカーの初回登録は、登記簿謄本、口座、担当者の本人確認、印鑑証明。繁忙期と特殊車両は早く押さえる。スタッドレス、保険、予備日も契約に書く。
+・緑ナンバー業者は保険と法令、フリーランスの運転手は柔軟さ。現場で使い分ける。"""
+LIAISON_NOTE = """制作は、各部の先を読んで動きます。
+
+・演出はチーフ、セカンド、サード。秒単位の判断はチーフ助監督と相談する。
+・搬出で手を貸せるのは、特機、照明、美術、衣裳。撮影部と録音部の精密機器には触らない。
+・血糊は、ビニール養生とシャワー。雨降らしは、散水、排水、防水、寒い日の俳優の体。劇用馬は仮設の厩、糞の産廃、馬係を置く。爆音とドローンは馬から離す。子役は、準備が終わってから呼び、待たせない。
+・事故は、対物、対車、対人を分け、写真で記録し、保険と制作部長へすぐ上げる。ケガと本当の火災は119。
+・現場の無断撮影とSNSは厳禁。未公開の情報は、許可なく出さない。"""
+CAMP_NOTE = """備品車、食事、撤収は、進行の命綱です。
+
+・備品車は、手前にお茶とシーバー、奥に予備、最後尾にゴミ。雨具、養生、充電電池の定位置を決める。
+・荷は南京縛り。2回転で摩擦を増やし、テンションで締まる。解くときは一方向に引く。紐の殺しは、たすきのように耳を作り、一発で解けるようにする。締めるときは強く、解くときは一瞬。
+・地方で切れやすいもの。ウェス、遮蔽の黒ビニール、養生毛布、固形燃料、炭酸消火器。
+・食事は献立を回し、アレルギー、宗教、ベジを先に聞く。差し入れは出したらすぐコールし、最前線に取り置きを残す。子役の食事は袋を分け、衛生を優先する。
+・撤収は現状復帰、分別、産廃は許可業者、ポットを洗い、電池を充電し、忘れ物をゼロにしてから鍵を返す。"""
+
+
+def craft_body(kind: str) -> tuple[str, str]:
+    if kind == "money":
+        return "お金は、預かった瞬間から自分の責任です。明日の現場で使う順に置いておきます。", MONEY_NOTE
+    if kind == "permit":
+        return "許可が下りてから、初めてロケは動きます。窓口と期限を先に置いておきます。", PERMIT_NOTE
+    if kind == "prep":
+        return "仕込みは、地域に信頼してもらう仕事です。挨拶から宿泊まで、この順で見てください。", PREP_NOTE
+    if kind == "timeline":
+        return "進行の1日は、朝から明日の確認まで途切れません。線路ごとに置いておきます。", TIMELINE_NOTE
+    if kind == "vehicle":
+        return "配車は、人・車・時間のパズルです。免許と台数を先に合わせてください。", VEHICLE_NOTE
+    if kind == "liaison":
+        return "制作は、各部の先を読んで動きます。手伝える場所と、触れてはいけない場所を分けておきます。", LIAISON_NOTE
+    if kind == "camp":
+        return "備品車と食事と撤収が、進行の命綱です。定位置を崩さないでください。", CAMP_NOTE
+    if kind == "callsheet":
+        return "香盤は、作って終わりではありません。指差しで読んでください。", CALLSHEET_NOTE
+    if kind == "mindset":
+        return "制作部は、現場の時間と信頼を預かる仕事です。", MINDSET_NOTE
+    return "近隣への挨拶文です。〇と角括弧だけ、その現場の予定に置き換えて使ってください。", GREETING_LETTER
+
+
+def craft_reply(kind: str, user_text: str = "", messages: list[dict] | None = None) -> tuple[str, bool]:
     try:
         st.session_state.last_craft = kind
         st.session_state.last_match_count = None
     except Exception:
         pass
-    if kind == "callsheet":
-        lead, body = "香盤の作り方です。", CALLSHEET_NOTE
-    elif kind == "road":
-        lead, body = "道路使用許可で先に見る注意点です。", ROAD_NOTE
-    elif kind == "mindset":
-        lead, body = "制作部の心得です。", MINDSET_NOTE
-    else:
-        lead, body = "近隣挨拶文の実務フォーマットです。〇と角括弧は、その現場の予定に置き換えて使ってください。", GREETING_LETTER
+    lead, body = craft_body(kind)
+    spoken = ""
+    try:
+        client = st.session_state.get("gemini_client")
+    except Exception:
+        client = None
+    if client is not None:
+        prompt = (
+            "あなたは現場を20年歩いてきたYUMITA。渡した制作部の知識だけを土台に、この質問へ直接答える。"
+            "温かく頼もしく、明日の現場で使える具体で、6文以内。"
+            "下にチェックリストを出すので、同じ箇条書きは繰り返さない。"
+            "電話番号、住所、作品名、撮影日、俳優名は作らない。空欄は空欄のまま残す。\n\n"
+            f"【これまでの会話】\n{history_block(messages or []) or '（なし）'}\n\n"
+            f"【質問】\n{user_text or lead}\n\n"
+            f"【実データ】\n{body}"
+        )
+        box: dict[str, str] = {}
+        models = model_chain()
+
+        def _speak() -> None:
+            for model in models:
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[prompt],
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_INSTRUCTION,
+                            temperature=0.4,
+                            max_output_tokens=500,
+                        ),
+                    )
+                    reply_text = guard_speech(getattr(response, "text", "") or "")
+                    if reply_text and not looks_like_failure(reply_text):
+                        box["text"] = reply_text
+                        return
+                except Exception:
+                    continue
+
+        try:
+            import threading
+            worker = threading.Thread(target=_speak, daemon=True)
+            worker.start()
+            worker.join(8)
+            spoken = box.get("text") or ""
+        except Exception:
+            spoken = ""
+    opening = spoken or lead
     return (
-        f"<div class='bubble'><p>{html.escape(lead)}</p><pre class='craft-doc'>{html.escape(body)}</pre></div>",
+        f"<div class='bubble'><p>{html.escape(opening)}</p><pre class='craft-doc'>{html.escape(body)}</pre></div>",
         True,
     )
 
@@ -3118,7 +3272,7 @@ def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
     except Exception:
         kind = ""
     if kind:
-        return craft_reply(kind, messages)
+        return craft_reply(kind, user_text, messages)
     try:
         return ledger_fallback(user_text)
     except Exception:
@@ -3156,7 +3310,7 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
     except Exception:
         craft = ""
     if craft:
-        reply, as_html = craft_reply(craft, messages)
+        reply, as_html = craft_reply(craft, user_text, messages)
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, as_html
