@@ -102,17 +102,18 @@ CIRCUIT_PATH = BASE / "assets" / "circuit.svg"
 
 load_dotenv(BASE / ".env")
 
-# スロットIDが 0 のあいだは広告ユニットを出さず、自社バナーを表示する。
+# サイドバーだけ本番スロット。中央のPRは自社バナーのまま。
 ADSENSE_CLIENT = "ca-pub-3232944598825832"
 ADSENSE_SLOT_MAIN = "0000000000"
-ADSENSE_SLOT_SIDE = "0000000000"
+ADSENSE_SLOT_SIDE = "3888878698"
+YOUTUBE_MV_URL = "https://youtube.com/@akbb_a.i.kuchipakubandbrothers?si=pk7gAKZ_JMLz1q_2"
 SHARE_PAGE = "https://yumi-cha.streamlit.app/"
 MAP_TOOL_URL = "https://map.almondbagger.com/"
 OFFICIAL_SITE_URL = "https://www.almondbagger.com/"
 FLAGSHIPS = (
     ("map", "AB式ロケ地図ツクール", "香盤とロケ地図を、無料で。", MAP_TOOL_URL),
     ("house", "ALMONDBAGGER", "公式サイト", OFFICIAL_SITE_URL),
-    ("akbb", "いいねの大盤振る舞い", "AKBB", OFFICIAL_SITE_URL),
+    ("akbb", "いいねの大盤振る舞い", "公式MV", YOUTUBE_MV_URL),
 )
 
 SYSTEM_INSTRUCTION = """
@@ -3642,20 +3643,41 @@ def flagship_cards(layout: str) -> str:
 
 
 def sponsor_markup(slot: str, variant: str) -> str:
-    client = ADSENSE_CLIENT.strip()
+    client = html.escape(ADSENSE_CLIENT.strip(), quote=True)
+    slot_id = html.escape(slot.strip(), quote=True)
     ad = ""
     if adsense_is_live(slot):
-        ad = (
-            f'<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={client}" crossorigin="anonymous"></script>'
-            f'<ins class="adsbygoogle" style="display:block;min-height:120px" data-ad-client="{client}" data-ad-slot="{slot.strip()}" data-ad-format="auto" data-full-width-responsive="true"></ins>'
-            "<script>(adsbygoogle = window.adsbygoogle || []).push({});</script>"
-        )
+        ad = f"""
+        <div class="ad-hold">
+          <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={client}" crossorigin="anonymous"></script>
+          <ins class="adsbygoogle"
+               style="display:block;width:100%;"
+               data-ad-client="{client}"
+               data-ad-slot="{slot_id}"
+               data-ad-format="auto"
+               data-full-width-responsive="true"></ins>
+          <script>
+            try {{
+              (adsbygoogle = window.adsbygoogle || []).push({{}});
+            }} catch (err) {{}}
+            setTimeout(function () {{
+              var hold = document.querySelector(".ad-hold");
+              var unit = hold && hold.querySelector("ins.adsbygoogle");
+              var status = unit && unit.getAttribute("data-ad-status");
+              var filled = unit && (unit.querySelector("iframe") || status === "filled");
+              if (!filled && hold) hold.classList.add("is-empty");
+            }}, 1800);
+          </script>
+        </div>
+        """
     layout = "stack" if variant == "side" else "row"
     return f"""
     <style>
       html, body {{ margin: 0; background: transparent; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }}
       .pr-wrap {{ padding: 2px; }}
       .pr-kicker {{ display: inline-block; font-size: 9px; letter-spacing: 0.18em; font-weight: 800; color: #94a3b8; border: 1px solid rgba(148,163,184,.45); border-radius: 999px; padding: 2px 6px; }}
+      .ad-hold {{ min-height: 100px; margin: 8px 0 0; overflow: hidden; }}
+      .ad-hold.is-empty {{ display: none; min-height: 0; margin: 0; }}
       .flags {{ display: flex; gap: 8px; margin-top: 8px; }}
       .flags.stack {{ flex-direction: column; }}
       .flags.row {{ flex-direction: row; }}
@@ -3684,7 +3706,7 @@ def sponsor_markup(slot: str, variant: str) -> str:
 def render_sponsor(slot: str, variant: str):
     height = 292 if variant == "side" else 132
     if adsense_is_live(slot):
-        height += 140
+        height += 120
     components.html(sponsor_markup(slot, variant), height=height, scrolling=False)
 
 
