@@ -400,6 +400,80 @@ MINDSET_NOTE = """制作部の心得は、現場を止めないことです。
 ・困ったら一人で抱えず、株式会社ALMONDBAGGERの制作へ相談する。"""
 
 
+FIELD_ARCHIVE = """# 映像制作現場・制作部実務ナレッジ（現場判断・阿吽の呼吸アーカイブ）
+
+## 1. ロケハンの進め方・交渉術
+- ネガティブシーン（殺人・暴力等）の交渉:
+  - 設定が「殺人」「事件」の場合、ビルオーナーや管理会社から門前払いされるケースが多い。
+  - 「大前提として設定がNGか、演出の見せ方次第で相談可能か」を初期段階で切り分ける。NGの場合は深追いせず即座に候補を切り替える。
+- オフィスビル・共有部の撮影交渉:
+  - 外観・ロゴの映り込み可否、エスカレーターの稼働/停止/逆回転の可否、警備員手配（指定警備会社の有無・費用）を事前に洗い出す。
+  - 会議室だけでなく「エレベーターホール」「廊下」が撮影可能かを必ず確認する。
+- 飲食店の貸切・営業時間外交渉:
+  - 営業時間外（深夜〜早朝、例: 25:00〜10:00）の搬入・完撤条件を確認。
+  - 「定休日買取」と「通常営業保証（売上補填）」の費用差を算出し、予算と相談する。
+- メインロケハン（監督・技術部帯同）の設計:
+  - 監督・撮影・照明・美術・特機・VFX（オダさん等）の参加可否を確認し、VFXやアクションが絡む物件は対象スタッフの可能日に集約する。
+  - 「見せる順番（同系統の物件を同日に寄せる）」と「移動時間・昼食場所の先回り確保」を徹底する。
+
+## 2. 特殊撮影・許認可・警察対応
+- ドローン撮影のルール:
+  - 航空局の許可・承認とは別に、国の定める人口集中地区（DID地区）等では管轄警察署の警備課へ事前通報（原則48時間前まで）を行う。
+  - 人口密集地に該当しない私有地・工場内であっても、近隣住民からの通報対策として所轄警察（警備課）へ飛行日時・業者・責任者・機体番号を共有しておく。
+- 牽引撮影・カースタント:
+  - 公道での牽引撮影は所轄警察の許可ハードルが極めて高い。事前にテスト場所（スタジオ内や私有地ゼブラスペース）でアングルチェックと台数確認を行う。
+  - 高速道路・主要交差点での撮影は、道路使用許可の条件（時間帯制限、交通量調査の提出）を警察と詰める。
+- 近隣工事とのバッティング対策:
+  - ロケ地周辺で道路工事・下水道工事が予定されている場合、工事業者（施工主・下請け）に直接連絡を取り、カッター作業や掘削の順番変更、音出しの待機相談、または作業日のスライドを交渉する。
+
+## 3. 車両・配車・移動マネジメント
+- 10時間インターバルルールの徹底:
+  - 撮影終了（撤収完了）から翌日の出発・集合時間までに「最低10時間の休息インターバル」を確保する。
+  - 撮影が押して10時間が切れる場合は、出発時間を遅らせるか、交代ドライバー・新幹線移動への切り替えをプロデューサー・監督と即座に調整する。
+- 地方ロケの大型車駐車確保:
+  - ロケバス・機材トラック（美トラ・特トラ・照明トラ等）は一般ホテルに停められないため、近隣の神社、専用駐車場、公共スペースを事前に確保する（日中・夜間の出入り条件確認）。
+- 配車表のリアルタイム管理:
+  - 誰が・何時に・どの車（自走・新幹線・マイクロ）で移動するかを前日夜までにFIXし、鍵の管理場所（バイザー、スタッフルーム）を徹底する。
+
+## 4. 現場運営・撤収・原状復帰
+- カメラサイドと指示系統:
+  - 制作部の責任者は常にカメラ横（助監督・監督の近く）に位置取り、次のカット・移動の変更をリアルタイムで先読みする。指示出しを助監督任せにしない。
+- 現場の原状復帰（証拠写真）:
+  - 撮影前・飾り込み前に「元の状態」を写真・動画で確実に記録する。
+  - 撤収時はゴミ拾い・落ち葉拾い・養生剥がし・忘れ物チェック（小道具・テープ・冷蔵庫内）を徹底し、管理者の立ち会い確認を経て完全撤収とする。
+- 差し入れ・クラフトの作法:
+  - 差し入れが届いたら「誰からの差し入れか」を明記した札を即座に立て、スタッフ全員へコールする。
+"""
+
+FIELD_SECTION_RE = (
+    (re.compile(r"ロケハン|ネガティブ|殺人|暴力|門前払い|エスカレーター|ロゴの映り|警備員手配|エレベーターホール|飲食店|貸切|定休日|営業保証|売上補填|メインロケハン|オダ|見せる順番"), "1"),
+    (re.compile(r"ドローン|DID|人口集中|警備課|48時間|カースタント|ゼブラ|牽引|高速道路|主要交差点|道路工事|下水道|カッター|掘削|音出し"), "2"),
+    (re.compile(r"10時間|インターバル|ロケバス|美トラ|特トラ|照明トラ|大型車|神社.{0,12}駐車|配車表|バイザー"), "3"),
+    (re.compile(r"カメラサイド|カメラ横|原状復帰|証拠写真|落ち葉|養生剥がし|飾り込み前|差し入れ|クラフト"), "4"),
+)
+
+
+def field_archive_sections() -> dict[str, str]:
+    chunks = re.split(r"(?=^## )", FIELD_ARCHIVE, flags=re.M)
+    found = {}
+    for chunk in chunks:
+        match = re.match(r"##\s*([1-4])", chunk)
+        if match:
+            found[match.group(1)] = chunk.strip("\n")
+    return found
+
+
+def field_excerpt(text: str) -> str:
+    sections = field_archive_sections()
+    picked = []
+    for pattern, key in FIELD_SECTION_RE:
+        if pattern.search(text or "") and key not in picked:
+            picked.append(key)
+    if not picked:
+        return FIELD_ARCHIVE.strip("\n")
+    return "\n\n".join(sections[key] for key in picked if key in sections)
+
+
 def station_permit_ready(text: str) -> bool:
     raw = text or ""
     if re.search(r"消防|火気|火皿|濡れ毛布", raw):
@@ -416,6 +490,9 @@ def station_permit_ready(text: str) -> bool:
 
 def classify_craft(text: str) -> str:
     raw = text or ""
+    if any(pattern.search(raw) for pattern, _key in FIELD_SECTION_RE):
+        if not (is_location_query(raw) and re.search(r"撮影できる|撮れる場所|ロケ地|ロケ候補|探して", raw) and not re.search(r"交渉|許可|通報|ルール|警備|手続き|進め方|原状|差し入れ", raw)):
+            return "field"
     if re.search(r"近隣.{0,8}挨拶|挨拶文|挨拶状|お願い状|ご挨拶", raw):
         kind = "greeting"
     elif re.search(r"ギャラ|契約書|仮払|精算|レシート|バレ飯|現場費|請求書|お金|予算", raw):
@@ -482,7 +559,7 @@ def inherited_craft(messages: list[dict] | None) -> str:
 TEMPLATE_ONLY_RE = re.compile(
     r"^(?:テンプレート|テンプレ|フォーマット|雛形|文面|文案)(?:を)?(?:出して|ください|下さい|見せて|書いて|お願い)?$"
 )
-CRAFT_TOPICS = {"greeting", "money", "permit", "prep", "timeline", "vehicle", "liaison", "camp", "callsheet", "mindset"}
+CRAFT_TOPICS = {"greeting", "money", "permit", "prep", "timeline", "vehicle", "liaison", "camp", "callsheet", "mindset", "field"}
 
 
 def saved_topic() -> str:
@@ -570,6 +647,8 @@ SYSTEM_INSTRUCTION += (
     "挨拶文は「ドラマ・映像撮影ロケーションのお願い」。日時は準備日・撮影日・予備日、場所、撮影内容、制作プロダクション、現場責任者・連絡先。空欄は空欄のまま。\n"
     + MONEY_NOTE + "\n" + PERMIT_NOTE + "\n" + PREP_NOTE + "\n" + TIMELINE_NOTE + "\n"
     + VEHICLE_NOTE + "\n" + LIAISON_NOTE + "\n" + CAMP_NOTE + "\n" + GREETING_LETTER
+    + "\n\n【現場判断・阿吽の呼吸アーカイブ。要約も省略もせず、該当する節をそのまま根拠にする】\n"
+    + FIELD_ARCHIVE
 )
 
 
@@ -592,6 +671,8 @@ def craft_body(kind: str) -> tuple[str, str]:
         return "香盤は、作って終わりではありません。指差しで読んでください。", CALLSHEET_NOTE
     if kind == "mindset":
         return "制作部は、現場の時間と信頼を預かる仕事です。", MINDSET_NOTE
+    if kind == "field":
+        return "現場の判断です。記録してある通りに置きます。", FIELD_ARCHIVE.strip("\n")
     return "近隣への挨拶文です。〇と角括弧だけ、その現場の予定に置き換えて使ってください。", GREETING_LETTER
 
 
@@ -603,16 +684,23 @@ def craft_reply(kind: str, user_text: str = "", messages: list[dict] | None = No
     except Exception:
         pass
     lead, body = craft_body(kind)
+    if kind == "field":
+        body = field_excerpt(user_text)
     spoken = ""
     try:
         client = st.session_state.get("gemini_client")
     except Exception:
         client = None
     if client is not None:
+        hold = (
+            "下の記録は省略せずアプリが出す。質問に対する対処は、その記録の文言（警備課への事前通報、カッター作業や掘削の順番変更、神社・専用駐車場・公共スペース、10時間の休息、証拠写真）から外さない。"
+            if kind == "field"
+            else "下にチェックリストを出すので、同じ箇条書きは繰り返さない。"
+        )
         prompt = (
             "あなたは現場を20年歩いてきたYUMITA。渡した制作部の知識だけを土台に、この質問へ直接答える。"
             "温かく頼もしく、明日の現場で使える具体で、6文以内。"
-            "下にチェックリストを出すので、同じ箇条書きは繰り返さない。"
+            + hold +
             "電話番号、住所、作品名、撮影日、俳優名は作らない。空欄は空欄のまま残す。\n\n"
             f"【これまでの会話】\n{history_block(messages or []) or '（なし）'}\n\n"
             f"【質問】\n{user_text or lead}\n\n"
