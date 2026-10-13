@@ -34,8 +34,10 @@ SYSTEM_INSTRUCTION = """
 
 ・トーン：知的で親しみやすく、結論ファースト。余計な自分語りや長い前置きはせず、現場の急ぎの状況を察してスパッと要点を伝える。
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
-・ロケ地相談時：架空の場所を捏造せず、与えられた施設情報だけを使う。過去の撮影日、未解禁を含む作品名、撮影実績には一切触れない。案内するのは施設名・所在地・撮影受入条件・施設スペックだけ。実データに無い条件は断定しない。
-・実データがあるとき：先に推薦コメントを書き、利用条件があれば「【利用条件】」として添える。箇条書きは名前、所在地、利用条件または設備。作品名と撮影日は書かない。
+・ロケ地相談時：撮影日、未解禁を含む作品名、撮影実績には触れない。案内は施設名・エリア・特徴・撮影受入条件だけ。個人の自宅は出さない。
+・「該当する実データはございません」「施設データはございません」「記録がありません」など、候補が無いと終わる返答は禁止。
+・台帳が3件以上あるとき：渡された施設だけを使い、足さない。
+・台帳が3件未満のとき：関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）で実在し、フィルムコミッションが案内する公共施設・撮影受け入れ施設を足して、合計3〜5件にする。各件は1行。「- 施設名 / 市区町村 / 特徴。【利用条件】土日祝・平日・夜間などの受入」。
 ・電話番号、メールアドレス、私的な個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
 ・URL、出典は書かない。実データにない日数、料金、最低注文数は作らない。
 ・代表：YUMITA（弓田）。株式会社ALMONDBAGGER 代表取締役。映画・ドラマの制作部として20年以上、ロケ手配、許認可、香盤、予算、現場統括を担う。八王子フィルムコミッションと連携し、AI Previs と AI VFX も手がける。アーティストとしても音楽活動をしている。肩書きの「日本一の制作部（自称）」「天才AIクリエイター（自称）」は本人の自称。
@@ -305,11 +307,14 @@ def split_facility_notes(text: str) -> tuple[str, str]:
 def public_facility(row: dict) -> tuple[str, str, str, str]:
     name = redact_private(str(row.get("location_name") or "").strip())
     address = redact_private(str(row.get("address") or "").strip())
-    blob = " ".join(
+    blob = "。".join(
         str(row.get(key) or "")
         for key in ("accept_terms", "detail_text", "facility_spec")
+        if str(row.get(key) or "").strip()
     )
     conditions, specs = split_facility_notes(blob)
+    conditions = re.sub(r"^(?:【利用条件】|利用条件[:：])", "", conditions).strip(" 、")
+    specs = re.sub(r"^(?:特徴[:：]|設備[:：])", "", specs).strip(" 、")
     return name, address, conditions, specs
 
 
@@ -641,8 +646,38 @@ MORE_RE = re.compile(
     r"他(?:居酒屋|に|の|は|も)*ない|ほか(?:に|の|は|も)*ない|もっと(?:教えて|見せて|見たい|出して|ください|下さい)|別の.{0,12}(?:ない|見せて|教えて)"
 )
 FORM_NAME_RE = re.compile(r"許可申請|始末書|申請者|別記様式|香盤|連絡網|クレジット|名簿|警察署長|止め撮り|走行撮影|代表取締役|御中")
-PRIVATE_NAME_RE = re.compile(r"自宅|個人宅|実家|表札|号室|一軒家|戸建")
+PRIVATE_NAME_RE = re.compile(r"自宅|個人宅|実家|表札|号室")
+CATEGORY_SYNONYMS = (
+    ("学校", ("小学校", "中学校", "高校", "高等学校", "大学", "廃校", "校舎", "学園")),
+    ("オフィス", ("ビル", "会議室", "事務所", "執務室")),
+    ("会社", ("ビル", "会議室", "事務所", "執務室", "オフィス")),
+    ("病院", ("医院", "クリニック", "病棟", "病室")),
+    ("家", ("民家", "一軒家", "ハウススタジオ", "古民家", "アパート")),
+)
+EMPTY_HIT_RE = re.compile(
+    r"該当する.{0,24}(?:ございません|ありません)|実データはございません|施設データはございません|"
+    r"記録がまだありません|一致する記録がまだ|データはございません|見つかりません"
+)
 KNOWHOW_RE = re.compile(r"駐車|養生|消えモノ|消モノ|時間制限|撮影時間|台数|搬入")
+
+
+def mentions_category(query: str, key: str) -> bool:
+    raw = query or ""
+    if key == "家":
+        return bool(re.search(r"(?<![一-龥])家(?![族電具主政])", raw))
+    return key in raw
+
+
+def category_terms(query: str) -> list[str]:
+    found: list[str] = []
+    for key, words in CATEGORY_SYNONYMS:
+        if not mentions_category(query, key):
+            continue
+        seeds = words if key == "家" else (key, *words)
+        for word in seeds:
+            if word not in found:
+                found.append(word)
+    return found
 
 
 def search_terms(query: str) -> list[str]:
@@ -1473,19 +1508,19 @@ def spot_cards_html(rows: list[dict]) -> str:
         name, address, conditions, specs = public_facility(row)
         if not name or blocked_place(name, address, str(row.get("site_name") or ""), str(row.get("detail_text") or "")):
             continue
-        addr_html = f"<p class='spot-addr'>📍 {html.escape(address)}</p>" if address else ""
+        feature = strip_confidential(str(row.get("feature") or specs or "")).strip(" 。、/")
+        if conditions and feature.startswith(conditions):
+            feature = feature[len(conditions):].strip(" 。、/")
+        addr_html = f"<p class='spot-addr'>エリア: {html.escape(address)}</p>" if address else ""
+        feature_html = f"<p class='spot-feature'>特徴: {html.escape(feature)}</p>" if feature else ""
         badge_html = (
             f"<p class='spot-badges'><span class='spot-badge'>【利用条件】{html.escape(conditions)}</span></p>"
             if conditions else ""
         )
-        memo_html = (
-            f"<details class='spot-memo'><summary>施設スペック</summary><p>{html.escape(specs)}</p></details>"
-            if specs else ""
-        )
         cards.append(
             "<article class='spot'>"
             f"<h3>{html.escape(name)}</h3>"
-            f"{addr_html}{badge_html}{memo_html}"
+            f"{addr_html}{feature_html}{badge_html}"
             "</article>"
         )
     if not cards:
@@ -1493,25 +1528,133 @@ def spot_cards_html(rows: list[dict]) -> str:
     return "<div class='spot-list'>" + "".join(cards) + "</div>"
 
 
+def drop_empty_claims(text: str) -> str:
+    kept = []
+    for piece in re.split(r"(?<=。)", str(text or "")):
+        if EMPTY_HIT_RE.search(piece):
+            continue
+        kept.append(piece)
+    return "".join(kept).strip()
+
+
+def unique_places(rows: list[dict]) -> list[dict]:
+    seen = set()
+    unique = []
+    for row in rows:
+        name = re.sub(r"\s+", "", str(row.get("location_name") or ""))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        unique.append(row)
+    return unique
+
+
+def parse_location_lines(text: str) -> list[dict]:
+    raw = loosen_candidates(EMPTY_HIT_RE.sub("", text or ""))
+    rows = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not re.match(r"^[-・]\s+\S", stripped):
+            continue
+        body = re.sub(r"^[-・]\s*", "", stripped)
+        parts = [part.strip() for part in re.split(r"\s*[/／]\s*", body) if part.strip()]
+        if not parts:
+            continue
+        name = re.sub(r"^(?:施設名|店名)\s*[:：]\s*", "", parts[0]).strip()
+        area = parts[1] if len(parts) > 1 else ""
+        rest = "。".join(parts[2:]) if len(parts) > 2 else ""
+        if len(parts) == 1:
+            matched = re.match(r"(.+?)[（(]([^）)]+)[）)]\s*(.*)", name)
+            if matched:
+                name, area, rest = matched.group(1).strip(), matched.group(2).strip(), matched.group(3).strip()
+        name = DATE_LEAK_RE.sub("", name).strip(" 　")
+        if len(name) < 2 or EMPTY_HIT_RE.search(name) or name in {"学校", "ビル", "病院", "家", "オフィス", "会社", "民家"}:
+            continue
+        area = DATE_LEAK_RE.sub("", strip_confidential(area)).strip()
+        rest = strip_confidential(rest)
+        conditions, specs = split_facility_notes(rest)
+        feature = rest
+        if "【利用条件】" in feature:
+            feature = feature.split("【利用条件】", 1)[0].strip(" 。、/")
+        row = {
+            "location_name": name,
+            "address": area,
+            "works_title": "",
+            "accept_terms": conditions,
+            "facility_spec": specs,
+            "feature": feature,
+            "detail_text": rest,
+            "site_name": "kanto-public",
+        }
+        if re.search(r"自宅|個人宅|実家", name + area):
+            continue
+        if not acceptable_public_row(row):
+            continue
+        rows.append(row)
+    return unique_places(rows)[:5]
+
+
+def gather_location_rows(query: str, limit: int = 5, exclude_keys: set[str] | None = None) -> list[dict]:
+    pool: list[dict] = []
+    try:
+        pool.extend(search_sheet_keywords(query, limit=limit))
+    except Exception:
+        pass
+    try:
+        pool.extend(search_local_locations(query, limit=limit, exclude_keys=exclude_keys) or [])
+    except Exception:
+        pass
+    return unique_places(pool)[:limit]
+
+
+def suggest_location_rows(user_text: str, existing: list[dict], messages: list[dict] | None) -> list[dict]:
+    known = "、".join(str(row.get("location_name") or "") for row in existing if row.get("location_name"))
+    task = (
+        "台帳は3件未満なので、関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）で実在する"
+        "フィルムコミッション案内の公共施設・撮影受け入れ施設を足し、合計3件から5件にする。"
+        "候補が無い、該当する実データが無い、という文は書かない。"
+        "撮影日、作品名、URL、電話番号は書かない。個人の自宅は出さない。"
+        "学校の質問は学校・廃校・校舎、オフィスや会社はビル・会議室・事務所、病院は医院・クリニック、家はハウススタジオ・古民家・撮影用の民家。"
+        "1件につき1行。行頭は「- 」。"
+        "形式は「- 施設名 / 市区町村 / 特徴。【利用条件】土日祝・平日・夜間などの受入」。"
+        f"既出の名前は繰り返さない: {known or 'なし'}"
+    )
+    spoken = ask_gemini(user_text, messages or [], None, None, place_brief(existing), task)
+    return parse_location_lines(spoken)
+
+
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
     try:
         more = is_more_request(user_text)
         query = followup_query(user_text) if more else user_text
         exclude = shown_location_keys(more)
-        rows = search_local_locations(query, limit=8, exclude_keys=exclude) if str(query or "").strip() else []
-        shown = rows[:8]
+        rows = gather_location_rows(query, limit=5, exclude_keys=exclude) if str(query or "").strip() else []
+        if len(rows) < 3:
+            rows = unique_places(rows + suggest_location_rows(user_text, rows, messages))
+        if len(rows) < 3:
+            rows = unique_places(rows + suggest_location_rows(user_text, rows, messages))
+        shown = rows[:5]
         if shown:
             remember_locations(shown, query, more)
-        facts = place_brief(shown) or "（該当する記録なし）"
-        intro_task = "本文は2文だけ。施設名は箇条書きにしない。撮影日と作品名は書かない。利用条件があれば【利用条件】として1つ書く。カードで出すので、条件に合う理由だけを短く書く。"
-        spoken = ask_gemini(user_text, messages or [], None, None, facts, intro_task)
-        sentences = re.findall(r"[^。]+。", spoken or "")
-        if sentences:
-            spoken = "".join(sentences[:2])
         listing = spot_cards_html(shown)
+        intro = ""
+        if shown:
+            intro = ask_gemini(
+                user_text,
+                messages or [],
+                None,
+                None,
+                place_brief(shown),
+                "前置きは1文だけ。施設名は列挙しない。候補が無いとは書かない。撮影日と作品名は書かない。",
+            )
+            intro = drop_empty_claims(intro)
+            sentences = re.findall(r"[^。]+。", intro or "")
+            if sentences:
+                intro = sentences[0]
         if not listing:
-            return spoken, False
-        return f"<div class='bubble'>{rich_text(spoken)}</div>{listing}", True
+            return "", False
+        bubble = f"<div class='bubble'>{rich_text(intro)}</div>" if intro else ""
+        return f"{bubble}{listing}", True
     except Exception:
         return "", False
 
@@ -1601,20 +1744,40 @@ def sheet_keywords(query: str) -> list[str]:
 
 
 def search_sheet_keywords(query: str, limit: int = 8) -> list[dict]:
+    expanded = category_terms(query)
     terms = sheet_keywords(query)
-    if not terms:
+    if not terms and not expanded:
         return []
+    school = mentions_category(query, "学校")
     ranked = []
     for row in sheet_rows():
+        if not acceptable_public_row(row):
+            continue
+        name = str(row.get("location_name") or "")
+        address = str(row.get("address") or "")
         blob = "".join(
             str(row.get(key) or "")
             for key in ("location_name", "address", "accept_terms", "facility_spec", "detail_text", "site_name")
         )
-        score = sum(1 for term in terms if term in blob)
         if is_bento_query(query) and not re.search(r"弁当|ケータリング|仕出し|ロケ弁", blob):
             continue
-        if score:
-            ranked.append((score, row))
+        if expanded:
+            if not any(term in name for term in expanded):
+                continue
+            if school and any(noise in name for noise in ("公園", "道路", "通り", "交差点", "歩道橋")):
+                continue
+            score = sum(2 for term in expanded if term in name)
+        else:
+            score = sum(1 for term in terms if term in blob)
+            if not score:
+                continue
+        if "東京" in address:
+            score += 3
+        elif any(area in address for area in ("神奈川", "千葉", "埼玉")):
+            score += 2
+        elif any(area in address for area in ("茨城", "栃木", "群馬")):
+            score += 1
+        ranked.append((score, row))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [row for _, row in ranked[:limit]]
 
@@ -1891,6 +2054,8 @@ def merge_map_records(payload) -> list[dict]:
 def ledger_fallback(user_text: str) -> tuple[str, bool]:
     if is_founder_query(user_text):
         return founder_card_html(), True
+    if is_location_query(user_text):
+        return location_reply(user_text)
     rows: list[dict] = []
     try:
         rows = search_sheet_keywords(user_text, limit=8)
@@ -1914,11 +2079,19 @@ def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         reply, as_html = compose_reply(user_text, messages, image_bytes, mime)
     except Exception:
         reply, as_html = "", False
+    visible = re.sub(r"<[^>]+>", "", reply or "")
+    if reply and is_location_query(user_text) and EMPTY_HIT_RE.search(visible):
+        try:
+            return location_reply(user_text, messages)
+        except Exception:
+            reply, as_html = "", False
     if reply:
         return reply, as_html
     try:
         return ledger_fallback(user_text)
     except Exception:
+        if is_location_query(user_text):
+            return "", False
         return "<div class='bubble'>台帳には、この言葉に一致する記録がまだありません。</div>", True
 
 
@@ -2178,6 +2351,7 @@ def apply_theme():
     }
     .spot h3 { margin: 0 0 4px; color: #0f172a; font-size: 1rem; font-weight: 700; line-height: 1.4; }
     .spot-addr { margin: 0; color: #64748b; font-size: 0.86rem; line-height: 1.5; }
+    .spot-feature { margin: 4px 0 0; color: #334155; font-size: 0.9rem; line-height: 1.55; }
     .spot-badges { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
     .spot-badge {
         display: inline-block; padding: 3px 8px; border-radius: 999px;
@@ -2794,38 +2968,6 @@ def render_overview():
         '<div class="subcatch">Production Brain OS  /  almond bagger</div>',
         unsafe_allow_html=True,
     )
-    if CM_PATH.exists():
-        with st.container(key="cmvideo"):
-            from streamlit import runtime
-
-            src = ""
-            if runtime.exists():
-                src = runtime.get_instance().media_file_mgr.add(
-                    str(CM_PATH), "video/mp4", "cm-loop", file_name="almondbagger_cm.mp4"
-                )
-            components.html(
-                f"""
-                <style>
-                  html, body {{ margin: 0; background: #0b1220; overflow: hidden; }}
-                  video {{
-                    width: 100%; height: 100%; display: block; object-fit: contain;
-                    background: #0b1220; border-radius: 16px;
-                  }}
-                  video::-webkit-media-controls,
-                  video::-webkit-media-controls-enclosure {{ display: none !important; }}
-                </style>
-                <video id="cm" autoplay loop muted playsinline disablepictureinpicture
-                  controlslist="nodownload nofullscreen noremoteplayback" src="{src}"></video>
-                <script>
-                  const cm = document.getElementById("cm");
-                  cm.muted = true;
-                  const start = () => cm.play().catch(() => {{}});
-                  cm.addEventListener("loadeddata", start);
-                  start();
-                </script>
-                """,
-                height=400,
-            )
     st.markdown(
         """
         <div class="ext-row">
