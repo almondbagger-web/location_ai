@@ -14,6 +14,7 @@ import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from scene_labels import abstract_scene, scene_search_terms
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = BASE / "locations_master.db"
@@ -34,9 +35,9 @@ SYSTEM_INSTRUCTION = """
 
 ・トーン：知的で親しみやすく、結論ファースト。余計な自分語りや長い前置きはせず、現場の急ぎの状況を察してスパッと要点を伝える。
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
-・ロケ地相談時：撮影日、未解禁を含む作品名、撮影実績には触れない。案内は施設名・エリア・特徴・撮影受入条件だけ。個人の自宅は出さない。
+・ロケ地相談時：撮影日、未解禁を含む作品名、俳優名、撮影実績には触れない。個人の自宅は出さない。案内はロケ地（施設・店舗・公園の正式名称）、住所（都道府県と市区町村）、シーン（取調室、屋上対峙、オフィス会議のような状況名）、条件だけ。シーンが特定できなければ「汎用撮影」。特徴の長文は書かない。新宿区・港区のような行政区名だけを施設名にしない。
 ・「該当する実データはございません」「施設データはございません」「記録がありません」など、候補が無いと終わる返答は禁止。
-・ロケ地は東京を優先し、1〜3件で終わらせない。実在施設を10件以上、該当するものは続けて出す。各件は1行。「- 施設名 / 市区町村 / 受入条件・特記（土日、夜間、搬入）」。撮影日と作品名は書かない。
+・ロケ地は東京を優先し、1〜3件で終わらせない。実在施設を10件以上出す。説明文は書かず、JSON配列だけを返す。各要素は {"name":"施設の正式名称","address":"都道府県と市区町村","condition":"撮影条件"}。1要素に1施設。条件が不明なら「要相談」。
 ・お弁当は1店舗につき1ブロック。店舗名、エリア、価格帯、配達条件を分け、1行に複数店をカンマやスラッシュで繋げない。最低注文数は実データに無い数字を作らない。
 ・電話番号、メールアドレス、私的な個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
 ・URL、出典は書かない。実データにない日数、料金、最低注文数は作らない。
@@ -223,8 +224,19 @@ def is_greeting(text: str) -> bool:
     return bool(raw and GREETING_RE.fullmatch(raw))
 
 
+def is_scene_search(text: str) -> bool:
+    raw = text or ""
+    if not scene_search_terms(raw):
+        return False
+    if re.search(r"作り方|配合|合成|原料|手順", raw):
+        return False
+    return bool(re.search(r"シーン|場所|どこ|撮影|できる|ロケ|探", raw))
+
+
 def is_location_query(text: str) -> bool:
     raw = text or ""
+    if is_scene_search(raw):
+        return True
     if is_bento_query(raw) or is_founder_query(raw) or is_greeting(raw) or is_desk_query(raw):
         return False
     if PROCEDURE_RE.search(raw):
@@ -767,11 +779,12 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
     use = (["id"] if "id" in columns else []) + [
         name for name in ("location_name", "address", "works_title", "scenes_category", "detail_text", "site_name") if name in columns
     ]
-    terms = search_terms(query)
+    scene_terms = scene_search_terms(query)
+    terms = scene_terms or search_terms(query)
     school = is_school_query(query)
     if not use or (not terms and not school):
         return []
-    search_cols = [name for name in use if name != "site_name"]
+    search_cols = [name for name in use if name not in ("site_name", "works_title")]
     quoted = ", ".join(f'"{name}"' for name in use)
     school_sql, school_params = school_filter_sql(columns) if school else ("", [])
     order_sql = f" ORDER BY {region_rank_sql()}, id" if "address" in columns else " ORDER BY id"
@@ -848,7 +861,7 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
             return []
 
     try:
-        rows = run(terms, "AND") if terms else []
+        rows = run(terms, "OR" if scene_terms else "AND") if terms else []
         if not rows and school:
             rows = run([], "AND")
         elif not rows and len(terms) > 1:
@@ -860,12 +873,14 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
                 item = {name: row[name] for name in use}
                 if "site_name" not in item:
                     item["site_name"] = ""
+                item["works_title"] = ""
+                item["scene"] = abstract_scene(str(item.get("scenes_category") or ""))
                 picked.append(item)
             picked.extend(learned_rows(terms))
             picked = [row for row in picked if acceptable_public_row(row)]
             if school:
                 picked = [row for row in picked if acceptable_school_row(row)]
-            heads = place_heads(query)
+            heads = [] if scene_terms else place_heads(query)
             if heads:
                 picked = [row for row in picked if headed_place(row, heads)]
             return picked
@@ -1446,7 +1461,7 @@ def ask_gemini(
             "実データが渡されている。このデータに無い施設名、店名、数字は作らない。"
             "紹介は2文まで。そのあと候補を箇条書きにする。"
             "1件につき必ず1行。行頭は「- 」。"
-            "ロケ地なら10件以上、1件1行。「- 施設名 / 市区町村 / 受入条件」。お弁当なら1店舗につき1ブロックで、店名、エリア、価格帯、配達条件を改行する。"
+            "ロケ地なら10件以上。JSON配列だけ。各要素は {\"name\":\"施設の正式名称\",\"address\":\"都道府県と市区町村\",\"condition\":\"撮影条件\"}。行政区名だけを name にしない。お弁当なら1店舗につき1ブロックで、店名、エリア、価格帯、配達条件を改行する。"
             "撮影日と作品名は書かない。1行の中に次の候補を続けない。"
         )
     elif not task:
@@ -1564,6 +1579,20 @@ PLACE_TAIL_RE = re.compile(
 PLACE_CHUNK_RE = re.compile(
     r"[一-龥A-Za-z0-9・]{1,12}(?:" + PLACE_TAIL_RE.pattern + r")"
 )
+PREFECTURES = (
+    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
+    "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
+    "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+    "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
+    "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+)
+PREFECTURE_RE = re.compile("|".join(PREFECTURES))
+ADMIN_NAME_RE = re.compile(
+    rf"^(?:{'|'.join(PREFECTURES)})?(?:[一-龥]{{1,8}}(?:郡|市|区|町|村)){{1,3}}$"
+)
+GENERIC_PLACE_NAMES = {"学校", "ビル", "病院", "家", "オフィス", "会社", "民家"}
 
 
 def split_glued_places(text: str) -> list[str]:
@@ -1585,36 +1614,162 @@ def split_glued_places(text: str) -> list[str]:
     return [raw]
 
 
-def is_area_token(text: str) -> bool:
-    compact = re.sub(r"\s+", "", text or "")
-    if not compact or len(compact) > 22:
+def is_admin_name(text: str) -> bool:
+    compact = re.sub(r"[\s　]", "", text or "")
+    if not compact:
         return False
-    return bool(re.search(r"(都|道|府|県|区|市|町|村)", compact)) and not PLACE_CHUNK_RE.search(compact)
+    if compact in PREFECTURES:
+        return True
+    return bool(ADMIN_NAME_RE.fullmatch(compact))
+
+
+def is_address_text(text: str) -> bool:
+    compact = re.sub(r"[\s　\u200e]", "", text or "")
+    if not compact or is_admin_name(compact):
+        return bool(compact)
+    if PLACE_TAIL_RE.search(compact) or re.search(r"店|食堂|カフェ|区立|市立", compact):
+        return False
+    if re.search(r"〒|\d{3}-\d{4}|丁目|番地", compact):
+        return True
+    if PREFECTURE_RE.search(compact) and re.search(r"(?:市|区|町|村)", compact):
+        return True
+    return False
 
 
 def is_note_token(text: str) -> bool:
     compact = str(text or "")
-    if PLACE_CHUNK_RE.search(compact) and not CONDITION_RE.search(compact) and not SPEC_RE.search(compact):
+    if PLACE_CHUNK_RE.search(compact) and not CONDITION_RE.search(compact):
         return False
-    return bool(CONDITION_RE.search(compact) or SPEC_RE.search(compact) or re.search(r"特徴|受入|搬入|撮影可|相談", compact))
+    return bool(CONDITION_RE.search(compact) or re.search(r"受入|撮影可|相談", compact))
+
+
+def format_address(text: str) -> str:
+    raw = re.sub(r"[\s　\u200e]", "", str(text or ""))
+    raw = re.sub(r"^〒?\d{3}-?\d{4}", "", raw)
+    pref = ""
+    matched = PREFECTURE_RE.search(raw)
+    if matched:
+        pref = matched.group(0)
+    locals_ = re.findall(r"[一-龥]{1,8}(?:市|区|町|村)", raw)
+    local = ""
+    if locals_:
+        local = locals_[0]
+        if len(locals_) >= 2 and local.endswith(("市", "郡")) and locals_[1].endswith(("区", "町", "村")):
+            local = local + locals_[1]
+    return f"{pref}{local}"
+
+
+def short_condition(text: str, own_name: str = "") -> str:
+    bits = []
+    for piece in re.split(r"[。／/、\n]", str(text or "")):
+        bit = piece.strip(" 　・")
+        bit = re.sub(r"^(?:【利用条件】|利用条件[:：]|撮影受入条件[:：]|条件[:：])", "", bit).strip()
+        if not bit or DATE_LEAK_RE.search(bit) or CREDIT_RE.search(bit):
+            continue
+        foreign = [item for item in PLACE_CHUNK_RE.findall(bit) if own_name not in item]
+        if foreign:
+            continue
+        if not CONDITION_RE.search(bit) and "相談" not in bit:
+            continue
+        if len(bit) > 24:
+            bit = bit[:24]
+        if bit not in bits:
+            bits.append(bit)
+        if len("、".join(bits)) >= 36:
+            break
+    return "、".join(bits)[:40]
+
+
+def clean_facility_name(text: str) -> str:
+    name = DATE_LEAK_RE.sub("", str(text or ""))
+    name = re.sub(r"^(?:ロケ地|施設名|店名|名称|名前)\s*[:：]\s*", "", name).strip(" 　・")
+    extra = ""
+
+    def grab(match: re.Match) -> str:
+        nonlocal extra
+        inner = match.group(1).strip()
+        if is_admin_name(inner) or is_address_text(inner):
+            extra = extra or inner
+            return ""
+        return match.group(0)
+
+    name = re.sub(r"[（(]([^）)]+)[）)]", grab, name).strip(" 　")
+    matched = re.match(
+        rf"^((?:{'|'.join(PREFECTURES)})?(?:[一-龥]{{1,6}}(?:市|区|町|村)){{1,2}})[の\s]+(.+)$",
+        name,
+    )
+    if matched and not is_admin_name(matched.group(2)):
+        name = matched.group(2).strip()
+    return re.sub(r"\s+", "", name)
+
+
+def valid_facility_name(name: str) -> bool:
+    compact = re.sub(r"\s+", "", name or "")
+    if len(compact) < 2 or len(compact) > 32:
+        return False
+    if compact in GENERIC_PLACE_NAMES or is_admin_name(compact) or is_address_text(compact):
+        return False
+    if re.search(r"〒|丁目|番地|にある|の中央|および|など", compact):
+        return False
+    if EMPTY_HIT_RE.search(compact):
+        return False
+    return True
+
+
+def expand_place_rows(row: dict) -> list[dict]:
+    peeled = clean_facility_name(str(row.get("location_name") or ""))
+    names = split_glued_places(peeled)
+    if len(names) < 2:
+        names = [peeled] if peeled else []
+    address = format_address(str(row.get("address") or ""))
+    condition = short_condition(
+        str(row.get("accept_terms") or row.get("condition") or ""),
+        peeled,
+    )
+    scene = abstract_scene(str(row.get("scene") or row.get("scenes_category") or ""))
+    many = len([name for name in names if valid_facility_name(clean_facility_name(name))]) >= 2
+    found = []
+    for raw in names:
+        name = clean_facility_name(raw)
+        if not valid_facility_name(name):
+            continue
+        item = {
+            "location_name": name,
+            "address": "" if many else address,
+            "accept_terms": "" if many else condition,
+            "condition": "要相談" if many or not condition else condition,
+            "scene": "汎用撮影" if many else scene,
+            "facility_spec": "",
+            "feature": "",
+            "detail_text": "",
+            "works_title": "",
+            "site_name": row.get("site_name") or "",
+        }
+        if row.get("id") not in (None, "") and not many:
+            item["id"] = row.get("id")
+        if acceptable_public_row(item):
+            found.append(item)
+    return found
 
 
 def facility_triples(parts: list[str]) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
-    name = area = note = ""
+    name = address = note = ""
+    held_address = ""
 
     def flush() -> None:
-        nonlocal name, area, note
-        if name:
-            rows.append((name, area, note))
-        name = area = note = ""
+        nonlocal name, address, note, held_address
+        if valid_facility_name(clean_facility_name(name)):
+            rows.append((clean_facility_name(name), address or held_address, note))
+        name = address = note = ""
+        held_address = ""
 
     for part in parts:
         part = part.strip()
         if not part:
             continue
         glued = split_glued_places(part)
-        if len(glued) >= 2 and not is_note_token(part):
+        if len(glued) >= 2 and not is_note_token(part) and not is_admin_name(part):
             if name:
                 flush()
             for chunk in glued:
@@ -1622,74 +1777,44 @@ def facility_triples(parts: list[str]) -> list[tuple[str, str, str]]:
                     flush()
                 name = chunk
             continue
-        if not name:
-            name = part
-            continue
-        if not area and is_area_token(part):
-            area = part
+        if is_admin_name(part) or is_address_text(part):
+            shown = format_address(part) or part
+            if not name:
+                held_address = shown
+            elif not address:
+                address = shown
             continue
         if is_note_token(part):
-            note = f"{note} / {part}".strip(" /") if note else part
+            if name:
+                note = f"{note}、{part}".strip("、") if note else part
             continue
-        flush()
+        if name:
+            flush()
         name = part
     flush()
     return rows
-
-
-def own_clauses(text: str, own_name: str) -> list[str]:
-    kept = []
-    for piece in re.split(r"[。\n]", str(text or "")):
-        bit = piece.strip(" 　、/")
-        if not bit:
-            continue
-        foreign = [item for item in PLACE_CHUNK_RE.findall(bit) if own_name not in item]
-        if foreign:
-            continue
-        if len(bit) > 42:
-            bit = bit[:42]
-        if bit not in kept:
-            kept.append(bit)
-    return kept
-
-
-def ward_line(address: str) -> str:
-    bits = re.findall(r"[一-龥]{1,8}(?:区|市|町|村)", address or "")
-    unique = list(dict.fromkeys(bits))
-    if unique:
-        return " / ".join(unique[:3])
-    compact = re.sub(r"\s+", " ", address or "").strip()
-    return compact[:28]
 
 
 def spot_cards_html(rows: list[dict]) -> str:
     cards = []
     seen = set()
     for row in rows:
-        raw_name = str(row.get("location_name") or "").strip()
-        names = split_glued_places(raw_name) if len(split_glued_places(raw_name)) >= 2 else [raw_name]
-        for name in names:
-            name = DATE_LEAK_RE.sub("", name).strip(" 　")
+        for place in expand_place_rows(row):
+            name = place["location_name"]
             key = re.sub(r"\s+", "", name)
-            if len(name) < 2 or key in seen or name in {"学校", "ビル", "病院", "家", "オフィス", "会社", "民家"}:
+            if key in seen:
                 continue
-            address = ward_line(str(row.get("address") or ""))
-            if blocked_place(name, address, str(row.get("site_name") or ""), ""):
-                continue
-            _, _, conditions, specs = public_facility(row if name == raw_name else {**row, "location_name": name, "detail_text": "", "feature": "", "accept_terms": "", "facility_spec": ""})
-            feature_bits = own_clauses(str(row.get("feature") or specs or ""), name) if name == raw_name else []
-            condition_bits = own_clauses(conditions, name) if name == raw_name else []
-            feature = " / ".join(bit for bit in feature_bits if bit not in condition_bits)
-            condition = " / ".join(condition_bits)
             seen.add(key)
+            address = place.get("address") or "要確認"
+            scene = place.get("scene") or "汎用撮影"
+            condition = place.get("condition") or "要相談"
             index = len(cards) + 1
-            addr_html = f"<p class='spot-addr'>エリア: {html.escape(address)}</p>" if address else ""
-            feature_html = f"<p class='spot-feature'>特徴: {html.escape(feature)}</p>" if feature else ""
-            cond_html = f"<p class='spot-cond'>撮影受入条件: {html.escape(condition)}</p>" if condition else ""
             cards.append(
                 "<article class='spot'>"
-                f"<h3><span class='spot-no'>{index}</span>{html.escape(name)}</h3>"
-                f"{addr_html}{feature_html}{cond_html}"
+                f"<h3><span class='spot-no'>{index}</span>ロケ地: {html.escape(name)}</h3>"
+                f"<p class='spot-addr'>住所: {html.escape(address)}</p>"
+                f"<p class='spot-scene'>シーン: {html.escape(scene)}</p>"
+                f"<p class='spot-cond'>条件: {html.escape(condition)}</p>"
                 "</article>"
             )
     if not cards:
@@ -1773,6 +1898,65 @@ def prefer_tokyo(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=rank)
 
 
+MASTER_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
+
+
+def master_location_rows() -> list[dict]:
+    import time
+
+    cached = list(MASTER_CACHE.get("rows") or [])
+    if cached and time.monotonic() - float(MASTER_CACHE.get("at") or 0) < 1800:
+        return cached
+    try:
+        curated = open_master_worksheet()
+        if curated is None:
+            return cached
+        worksheet = curated.spreadsheet.worksheet("ロケ地")
+        rows = []
+        for cells in worksheet.get_all_values()[1:]:
+            name, address, condition, scene, genre = (cells + ["", "", "", "", ""])[:5]
+            if not str(name).strip():
+                continue
+            label = str(scene or "").strip() or "汎用撮影"
+            rows.append(
+                {
+                    "location_name": str(name).strip(),
+                    "address": str(address).strip(),
+                    "accept_terms": str(condition or "").strip(),
+                    "condition": str(condition or "").strip(),
+                    "scene": label,
+                    "scenes_category": label,
+                    "works_title": "",
+                    "detail_text": "",
+                    "site_name": str(genre or "").strip() or "ロケ地",
+                }
+            )
+        MASTER_CACHE["at"] = time.monotonic()
+        MASTER_CACHE["rows"] = rows
+        return rows
+    except Exception:
+        return cached
+
+
+def search_master_locations(query: str, limit: int = 40) -> list[dict]:
+    terms = scene_search_terms(query) or search_terms(query)
+    if not terms:
+        return []
+    ranked = []
+    for row in master_location_rows():
+        if not acceptable_public_row(row):
+            continue
+        blob = "".join(str(row.get(key) or "") for key in ("location_name", "address", "scene", "scenes_category", "site_name"))
+        if not any(term in blob for term in terms):
+            continue
+        score = sum(2 for term in terms if term in blob)
+        if "東京" in str(row.get("address") or ""):
+            score += 3
+        ranked.append((score, row))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [row for _, row in ranked[:limit]]
+
+
 def gather_location_rows(query: str, limit: int = 40, exclude_keys: set[str] | None = None) -> list[dict]:
     pool: list[dict] = []
     try:
@@ -1783,6 +1967,11 @@ def gather_location_rows(query: str, limit: int = 40, exclude_keys: set[str] | N
         pool.extend(search_local_locations(query, limit=limit, exclude_keys=exclude_keys) or [])
     except Exception:
         pass
+    if len(unique_places(pool)) < 10:
+        try:
+            pool.extend(search_master_locations(query, limit=limit))
+        except Exception:
+            pass
     return prefer_tokyo(unique_places(pool))[:limit]
 
 
@@ -1882,6 +2071,7 @@ def sheet_rows() -> list[dict]:
         rows = []
         for cells in worksheet.get_all_values()[1:]:
             category, name, area, summary = (cells + ["", "", "", ""])[:4]
+            scene_cell = cells[6].strip() if len(cells) > 6 else ""
             if not str(name).strip():
                 continue
             conditions, specs = split_facility_notes(str(summary or ""))
@@ -1890,6 +2080,7 @@ def sheet_rows() -> list[dict]:
                     "location_name": str(name).strip(),
                     "address": str(area).strip(),
                     "works_title": "",
+                    "scene": abstract_scene(scene_cell) if scene_cell else "",
                     "accept_terms": conditions,
                     "facility_spec": specs,
                     "detail_text": " / ".join(
@@ -1940,7 +2131,7 @@ def search_sheet_keywords(query: str, limit: int = 40) -> list[dict]:
         address = str(row.get("address") or "")
         blob = "".join(
             str(row.get(key) or "")
-            for key in ("location_name", "address", "accept_terms", "facility_spec", "detail_text", "site_name")
+            for key in ("location_name", "address", "accept_terms", "facility_spec", "detail_text", "scene", "site_name")
         )
         if is_bento_query(query) and not re.search(r"弁当|ケータリング|仕出し|ロケ弁", blob):
             continue
@@ -2301,6 +2492,11 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, reply.startswith("<")
+    if is_scene_search(user_text):
+        reply, as_html = location_reply(user_text, messages)
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
     if is_desk_query(user_text):
         reply, as_html = desk_reply(user_text, messages)
         row_id = log_search_query(user_text)
@@ -2539,7 +2735,7 @@ def apply_theme():
     .spot-no {
         flex: 0 0 auto; color: #ef4444; font-size: 1.05rem; font-weight: 800;
     }
-    .spot-addr, .spot-feature, .spot-cond {
+    .spot-addr, .spot-scene, .spot-feature, .spot-cond {
         display: block; margin: 4px 0 0 1.7rem; color: #334155; font-size: 0.92rem; line-height: 1.55;
     }
     .spot-addr { color: #64748b; }
