@@ -1,0 +1,8 @@
+
+google-credentials.json
+*credentials*.json
+locations_master.db
+*.db
+*.db-wal
+*.db-shm
+.env
