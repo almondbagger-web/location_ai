@@ -102,10 +102,18 @@ CIRCUIT_PATH = BASE / "assets" / "circuit.svg"
 
 load_dotenv(BASE / ".env")
 
-# 本番では ca-pub- の実IDと、広告ユニットのスロットIDに差し替える。
-ADSENSE_CLIENT = "ca-pub-XXXXXXXXXXXXXXXX"
+# スロットIDが 0 のあいだは広告ユニットを出さず、自社バナーを表示する。
+ADSENSE_CLIENT = "ca-pub-3232944598825832"
 ADSENSE_SLOT_MAIN = "0000000000"
 ADSENSE_SLOT_SIDE = "0000000000"
+SHARE_PAGE = "https://yumi-cha.streamlit.app/"
+MAP_TOOL_URL = "https://map.almondbagger.com/"
+OFFICIAL_SITE_URL = "https://www.almondbagger.com/"
+FLAGSHIPS = (
+    ("map", "AB式ロケ地図ツクール", "香盤とロケ地図を、無料で。", MAP_TOOL_URL),
+    ("house", "ALMONDBAGGER", "公式サイト", OFFICIAL_SITE_URL),
+    ("akbb", "いいねの大盤振る舞い", "AKBB", OFFICIAL_SITE_URL),
+)
 
 SYSTEM_INSTRUCTION = """
 あなたは映像制作会社 株式会社ALMONDBAGGERのAI制作アシスタント『YUMI-CHA』です。映画・ドラマ・CM・MVの制作部現場を20年以上支えてきたベテランの知見と、Google Gemini本来の洗練された知性・論理的思考を持っています。
@@ -2396,6 +2404,17 @@ def gemini_location_rows(user_text: str, messages: list[dict] | None) -> list[di
 
 
 RETRY_LIST_HTML = "<ul class='line-list'><li>・候補を読み直しています。施設名を添えて、もう一度送ってください。</li></ul>"
+MAP_PROMO_HTML = (
+    f'<a class="map-promo" href="{MAP_TOOL_URL}" target="_blank" rel="noopener noreferrer">'
+    "💡 ロケ地図の作成・香盤整理には【AB式ロケ地図ツクール】が無料で使えます"
+    "</a>"
+)
+
+
+def with_map_promo(body: str) -> str:
+    if not body or body == RETRY_LIST_HTML or "line-list" not in body or "map-promo" in body:
+        return body
+    return body + MAP_PROMO_HTML
 
 
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
@@ -2429,7 +2448,7 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
             except Exception:
                 pass
             return RETRY_LIST_HTML, True
-        return listing, True
+        return with_map_promo(listing), True
     except Exception:
         try:
             st.session_state.last_match_count = 0
@@ -2446,6 +2465,8 @@ SHEET1_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?fo
 MASTER_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=2043901308"
 QUERY_SHEET_NAME = "未解決クエリ"
 QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
+LOG_SHEET_NAME = "検索ログ"
+LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
 
 
 def open_master_book():
@@ -2504,12 +2525,38 @@ def ensure_query_sheet(book):
     return worksheet
 
 
+def ensure_log_sheet(book):
+    import gspread
+
+    try:
+        worksheet = book.worksheet(LOG_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        worksheet = book.add_worksheet(title=LOG_SHEET_NAME, rows=5000, cols=3)
+        worksheet.append_row(LOG_HEADER, value_input_option="RAW")
+        return worksheet
+    try:
+        head = worksheet.row_values(1)
+    except Exception:
+        return worksheet
+    if not head:
+        try:
+            worksheet.append_row(LOG_HEADER, value_input_option="RAW")
+        except Exception:
+            return worksheet
+    elif head[0] != "日時":
+        try:
+            worksheet.insert_row(LOG_HEADER, index=1, value_input_option="RAW")
+        except Exception:
+            return worksheet
+    return worksheet
+
+
 def record_chat_query(query: str, reply: str) -> None:
     import threading
     import time
 
-    text = re.sub(r"\s+", " ", str(query or "")).strip()
-    if not text:
+    text = str(query or "")
+    if not text.strip():
         return
     visible = re.sub(r"<[^>]+>", "", reply or "")
     counted = None
@@ -2523,14 +2570,21 @@ def record_chat_query(query: str, reply: str) -> None:
         unresolved = True
     if is_detail_question(text) and visible.strip() and not EMPTY_HIT_RE.search(visible):
         unresolved = False
-    stamp = time.strftime("%Y-%m-%d %H:%M")
-    payload = [
-        text[:500],
-        "true" if unresolved else "false",
-        "【未解決】" if unresolved else "",
-        "" if counted is None else str(counted),
+    if counted is not None and counted > 0 and not unresolved:
+        status = f"解決 / ヒット{counted}件"
+    elif unresolved:
+        status = "【未解決】"
+    else:
+        status = "解決"
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_row = [stamp, text[:2000], status]
+    unresolved_row = [
+        text.strip()[:500],
+        "true",
+        "【未解決】",
+        "0" if counted is None else str(counted),
         stamp,
-        "open" if unresolved else "resolved",
+        "open",
     ]
 
     def write_row() -> None:
@@ -2538,11 +2592,16 @@ def record_chat_query(query: str, reply: str) -> None:
             book = open_master_book()
             if book is None:
                 return
-            ensure_query_sheet(book).append_row(payload, value_input_option="RAW")
+            ensure_log_sheet(book).append_row(log_row, value_input_option="RAW")
+            if status == "【未解決】":
+                ensure_query_sheet(book).append_row(unresolved_row, value_input_option="RAW")
         except Exception:
             return
 
-    threading.Thread(target=write_row, daemon=True).start()
+    try:
+        threading.Thread(target=write_row, daemon=True).start()
+    except Exception:
+        return
 
 
 def sheet_rows() -> list[dict]:
@@ -3187,6 +3246,22 @@ def apply_theme():
     .talk { margin: 0 0 14px; color: #1e293b; font-size: 0.98rem; line-height: 1.75; }
     .line-list { list-style: none; margin: 8px 0 0; padding: 0; color: #0f172a; font-size: 0.98rem; line-height: 1.75; }
     .line-list li { margin: 0 0 2px; }
+    a.map-promo {
+        display: block; margin: 12px 0 0; padding: 10px 14px; border-radius: 12px;
+        background: #fff7ed; color: #9a3412 !important; text-decoration: none !important;
+        border: 1px solid rgba(251, 146, 60, 0.45); font-size: 13px; line-height: 1.6; font-weight: 700;
+    }
+    a.map-promo:hover { border-color: #c4161c; color: #c4161c !important; }
+    .share-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 14px 0 4px; }
+    a.share-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        min-width: 132px; padding: 8px 14px; border-radius: 999px;
+        text-decoration: none !important; font-size: 13px; font-weight: 800;
+        border: 1px solid #e6ebf0; background: #fff; color: #1f2937 !important;
+    }
+    a.share-btn.line { color: #06c755 !important; border-color: rgba(6, 199, 85, 0.45); }
+    a.share-btn.x { color: #0f172a !important; }
+    a.share-btn:hover { border-color: #c4161c; }
     .spot-list { margin: 12px 0 0; display: flex; flex-direction: column; gap: 12px; }
     .spot {
         display: block; margin: 0; padding: 14px 16px; border-radius: 16px;
@@ -3550,31 +3625,105 @@ def adsense_is_live(slot: str) -> bool:
     return client.startswith("ca-pub-") and "X" not in client and slot.isdigit() and int(slot) > 0
 
 
+def flagship_cards(layout: str) -> str:
+    cards = []
+    for tone, title, kicker, href in FLAGSHIPS:
+        cards.append(
+            f'<a class="flag {html.escape(tone)}" href="{html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer">'
+            f'<span>{html.escape(kicker)}</span><strong>{html.escape(title)}</strong></a>'
+        )
+    return f'<div class="flags {html.escape(layout)}">' + "".join(cards) + "</div>"
+
+
 def sponsor_markup(slot: str, variant: str) -> str:
+    client = ADSENSE_CLIENT.strip()
+    ad = ""
     if adsense_is_live(slot):
-        client = ADSENSE_CLIENT.strip()
-        return f"""
-        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={client}" crossorigin="anonymous"></script>
-        <ins class="adsbygoogle" style="display:block;min-height:120px"
-             data-ad-client="{client}" data-ad-slot="{slot.strip()}"
-             data-ad-format="auto" data-full-width-responsive="true"></ins>
-        <script>(adsbygoogle = window.adsbygoogle || []).push({{}});</script>
-        """
-    kind = "sponsor-slot side" if variant == "side" else "sponsor-slot main"
-    return (
-        f'<aside class="{kind}" aria-label="PR">'
-        '<span class="pr-badge">PR</span>'
-        '<div class="sponsor-body">スポンサー</div>'
-        "</aside>"
-    )
+        ad = (
+            f'<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={client}" crossorigin="anonymous"></script>'
+            f'<ins class="adsbygoogle" style="display:block;min-height:120px" data-ad-client="{client}" data-ad-slot="{slot.strip()}" data-ad-format="auto" data-full-width-responsive="true"></ins>'
+            "<script>(adsbygoogle = window.adsbygoogle || []).push({});</script>"
+        )
+    layout = "stack" if variant == "side" else "row"
+    return f"""
+    <style>
+      html, body {{ margin: 0; background: transparent; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }}
+      .pr-wrap {{ padding: 2px; }}
+      .pr-kicker {{ display: inline-block; font-size: 9px; letter-spacing: 0.18em; font-weight: 800; color: #94a3b8; border: 1px solid rgba(148,163,184,.45); border-radius: 999px; padding: 2px 6px; }}
+      .flags {{ display: flex; gap: 8px; margin-top: 8px; }}
+      .flags.stack {{ flex-direction: column; }}
+      .flags.row {{ flex-direction: row; }}
+      a.flag {{
+        display: block; flex: 1; text-decoration: none; color: #f8fafc; border-radius: 14px; padding: 12px 12px 11px;
+        border: 1px solid rgba(248, 113, 113, 0.35);
+        background:
+          radial-gradient(120px 40px at 0% 0%, rgba(196,22,28,.55), transparent 70%),
+          linear-gradient(145deg, #0b1220 0%, #1e293b 58%, #3f1d2e 100%);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.04), 0 8px 18px rgba(15,23,42,.18);
+      }}
+      a.flag span {{ display: block; font-size: 10px; letter-spacing: 0.14em; color: #fecaca; font-weight: 700; }}
+      a.flag strong {{ display: block; margin-top: 4px; font-size: 13px; line-height: 1.35; }}
+      a.flag.map strong {{ color: #fff7ed; }}
+      a.flag.house strong {{ color: #e0f2fe; }}
+      a.flag.akbb strong {{ color: #fde68a; }}
+    </style>
+    <div class="pr-wrap" data-ad-client="{client}">
+      <span class="pr-kicker">PR</span>
+      {ad}
+      {flagship_cards(layout)}
+    </div>
+    """
 
 
 def render_sponsor(slot: str, variant: str):
-    markup = sponsor_markup(slot, variant)
+    height = 292 if variant == "side" else 132
     if adsense_is_live(slot):
-        components.html(markup, height=150)
-    else:
-        st.markdown(markup, unsafe_allow_html=True)
+        height += 140
+    components.html(sponsor_markup(slot, variant), height=height, scrolling=False)
+
+
+def share_links() -> tuple[str, str]:
+    from urllib.parse import quote
+
+    text = "制作部のロケ地検索 YUMI-CHA"
+    line = "https://social-plugins.line.me/lineit/share?url=" + quote(SHARE_PAGE, safe="")
+    tweet = "https://twitter.com/intent/tweet?url=" + quote(SHARE_PAGE, safe="") + "&text=" + quote(text, safe="")
+    return line, tweet
+
+
+def render_share():
+    line, tweet = share_links()
+    st.markdown(
+        f'<div class="share-row">'
+        f'<a class="share-btn line" href="{html.escape(line, quote=True)}" target="_blank" rel="noopener noreferrer">LINEでシェア</a>'
+        f'<a class="share-btn x" href="{html.escape(tweet, quote=True)}" target="_blank" rel="noopener noreferrer">Xでシェア</a>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    components.html(
+        f"""
+        <style>
+          html, body {{ margin: 0; background: transparent; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }}
+          button {{
+            width: 100%; height: 36px; border-radius: 999px; border: 1px solid #e6ebf0;
+            background: #fff; color: #1f2937; font-weight: 800; font-size: 13px; cursor: pointer;
+          }}
+        </style>
+        <button id="copy" type="button">URLをコピー</button>
+        <script>
+          const page = {json.dumps(SHARE_PAGE)};
+          document.getElementById("copy").addEventListener("click", async () => {{
+            try {{
+              await navigator.clipboard.writeText(page);
+              document.getElementById("copy").textContent = "コピーしました";
+            }} catch (err) {{
+              document.getElementById("copy").textContent = page;
+            }}
+          }});
+        </script>
+        """,
+        height=42,
+    )
 
 
 def reset_chat():
@@ -3706,6 +3855,7 @@ def render_sidebar():
         )
         with st.container(key="reset"):
             st.button("🧹 会話をリセット", key="reset_chat", width="stretch", on_click=reset_chat)
+        render_share()
         render_sponsor(ADSENSE_SLOT_SIDE, "side")
 
 
@@ -3840,6 +3990,7 @@ def render_overview():
         """,
         unsafe_allow_html=True,
     )
+    render_share()
 
 
 def main():
