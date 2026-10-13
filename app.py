@@ -14,7 +14,84 @@ import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from scene_labels import abstract_scene, scene_search_terms
+
+SCENE_QUOTE_RE = re.compile(r"[「『][^」』]{0,40}[」』]")
+SCENE_DATE_RE = re.compile(
+    r"(?:令和|平成|昭和)\s*\d+\s*年|\d{4}\s*年|"
+    r"\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+)
+SCENE_CREDIT_RE = re.compile(r"映画|ドラマ|主演|出演|作品|放送|フジテレビ|日テレ|テレビ朝日|TBS|NHK")
+SCENE_RULES = (
+    ("取調室", r"取調|取調べ|尋問|留置"),
+    ("逃走", r"逃走|追跡|チェイス"),
+    ("オフィス会議", r"会議|ミーティング|商談|面談"),
+    ("オフィス執務", r"オフィス|執務|デスク|事務室"),
+    ("屋上対峙", r"屋上"),
+    ("病院ロビー", r"ロビー|待合"),
+    ("病室", r"病室|病棟|手術室"),
+    ("教室", r"教室|校舎|授業"),
+    ("事件現場", r"事件|検証|犯行"),
+    ("アクション", r"爆破|爆発|アクション|格闘|戦闘"),
+    ("階段", r"階段"),
+    ("橋", r"橋"),
+    ("公園", r"公園"),
+    ("外観", r"外観"),
+    ("港", r"港|埠頭|水上"),
+    ("警察署", r"警察|警視|交番"),
+    ("駅", r"駅|ホーム|改札"),
+    ("レストラン", r"レストラン|食堂|カフェ|喫茶"),
+    ("住宅内", r"居間|リビング|キッチン|寝室"),
+    ("対話", r"対話|会話|会見"),
+    ("対峙", r"対峙|対決|緊迫"),
+    ("通り", r"通り|街並み|商店街"),
+    ("広場", r"広場"),
+)
+SCENE_QUERIES = (
+    ("取調べ", ("取調", "取調べ")),
+    ("取調", ("取調", "取調べ")),
+    ("屋上", ("屋上",)),
+    ("爆破", ("爆破", "爆発", "アクション")),
+    ("対決", ("対峙", "対決")),
+    ("緊迫", ("対峙", "対決", "緊迫")),
+    ("逃走", ("逃走", "追跡")),
+    ("会議", ("会議", "オフィス")),
+    ("病室", ("病室", "病棟")),
+    ("ロビー", ("ロビー", "待合")),
+    ("事件", ("事件", "検証")),
+    ("教室", ("教室", "校舎")),
+    ("オフィス", ("オフィス", "執務")),
+)
+
+
+def abstract_scene(text: str) -> str:
+    raw = SCENE_QUOTE_RE.sub(" ", str(text or ""))
+    raw = SCENE_DATE_RE.sub(" ", raw)
+    kept = []
+    for part in re.split(r"[。／/\n]", raw):
+        piece = part.strip()
+        if not piece or SCENE_CREDIT_RE.search(piece):
+            continue
+        kept.append(piece)
+    blob = " ".join(kept)
+    labels = []
+    for label, pattern in SCENE_RULES:
+        if re.search(pattern, blob) and label not in labels:
+            labels.append(label)
+        if len(labels) >= 3:
+            break
+    return " / ".join(labels) if labels else "汎用撮影"
+
+
+def scene_search_terms(query: str) -> list[str]:
+    found = []
+    raw = query or ""
+    for needle, terms in SCENE_QUERIES:
+        if needle not in raw:
+            continue
+        for term in terms:
+            if term not in found:
+                found.append(term)
+    return found[:6]
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = BASE / "locations_master.db"
