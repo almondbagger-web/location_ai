@@ -5,9 +5,14 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: daily-sheet-crawler
+  cancel-in-progress: false
+
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -21,4 +26,4 @@ jobs:
       - name: Append new locations
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        run: python3 scripts/sheet_crawler.py
+        run: python3 scripts/sheet_crawler.py --limit 250 --pause 0.4

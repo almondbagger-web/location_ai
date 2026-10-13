@@ -4,9 +4,11 @@
 無いときはプロジェクト直下の google-credentials.json を使う。
 個人名、電話番号、台本のシーン番号、制作部の連絡メモは書き込まない。
 
+1回の追記は250件まで。取得済みURLは読み直さず、シートへの書き込みはまとめて行う。
+
 例:
   python3 scripts/sheet_crawler.py --dry-run --limit 4
-  python3 scripts/sheet_crawler.py --limit 8
+  python3 scripts/sheet_crawler.py --limit 250
 """
 
 from __future__ import annotations
@@ -55,7 +57,43 @@ SCOPES = [
 KANTO = ("東京都", "神奈川県", "千葉県", "埼玉県", "茨城県", "栃木県", "群馬県")
 BLOCKED_HOSTS = {"loca.ash.jp", "www.loca.ash.jp"}
 CREDENTIALS_PATH = ROOT / "google-credentials.json"
-PAUSE = 1.5
+MAX_RECORDS = 250
+FETCH_BUDGET = 400
+SHEET_BATCH = 80
+PAUSE = 0.4
+LINK_HINTS = ("news", "topics", "新着", "お知らせ", "public", "公園", "公民館", "庁舎", "弁当", "ケータリング", "仕出し")
+EXTRA_SOURCES = [
+    {
+        "prefecture": "東京都",
+        "site_name": "東京ロケーションボックス新着",
+        "home": "https://www.locationbox.metro.tokyo.lg.jp/",
+        "include": ("/news", "/topics", "/catalog/", "お知らせ"),
+    },
+    {
+        "prefecture": "神奈川県",
+        "site_name": "横浜フィルムコミッション",
+        "home": "https://www.city.yokohama.lg.jp/kanko-bunka/miryoku/films/",
+        "include": ("films", "location", "ロケ", "公園", "公共"),
+    },
+    {
+        "prefecture": "千葉県",
+        "site_name": "千葉県フィルムコミッション新着",
+        "home": "https://fc.ccb.or.jp/",
+        "include": ("/news", "/location", "新着", "弁当"),
+    },
+    {
+        "prefecture": "栃木県",
+        "site_name": "宇都宮フィルムコミッション",
+        "home": "https://www.utsunomiya-cvb.org/fc/",
+        "include": ("/fc", "location", "spot", "ロケ", "弁当"),
+    },
+    {
+        "prefecture": "群馬県",
+        "site_name": "高崎フィルム・コミッション",
+        "home": "https://www.takasaki-film.jp/",
+        "include": ("location", "spot", "ロケ", "弁当", "producer"),
+    },
+]
 
 PHONE_RE = re.compile(r"(?:0\d{1,4}[-(]?\d{1,4}[-)]?\d{3,4}|0\d{9,10})")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
@@ -74,7 +112,8 @@ PUBLIC_RE = re.compile(
 VENDOR_RE = re.compile(
     r"(?<![一-龥A-Za-z0-9])([一-龥A-Za-z0-9ー]{2,18}(?:弁当|仕出し|ケータリング))"
 )
-GENERIC_VENDOR = {"ロケ弁", "お弁当", "仕出し弁当", "弁当", "ケータリング", "仕出し"}
+GENERIC_VENDOR = {"ロケ弁", "お弁当", "仕出し弁当", "弁当", "ケータリング", "仕出し", "地元弁当", "支援業者仕出し"}
+WEAK_VENDOR_RE = re.compile(r"^(?:地元|市内|県内|支援|紹介|おすすめ|各種|関係)")
 JST = timezone(timedelta(hours=9))
 
 
@@ -103,18 +142,6 @@ def open_sheet(client):
 
 def norm_name(name: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name or "")).casefold()
-
-
-def existing_names(worksheet) -> set[str]:
-    column = worksheet.col_values(2)
-    names = set()
-    for index, value in enumerate(column):
-        if index == 0 and clean_space(value) == "名称":
-            continue
-        key = norm_name(value)
-        if key:
-            names.add(key)
-    return names
 
 
 def ensure_header(worksheet):
@@ -193,6 +220,7 @@ class PoliteFetcher:
         self.session = requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT
         self.robots: dict[str, urllib.robotparser.RobotFileParser] = {}
+        self.cache: dict[str, str] = {}
         self.last_fetch = 0.0
 
     def pause_turn(self):
@@ -222,18 +250,28 @@ class PoliteFetcher:
         return parser.can_fetch(USER_AGENT, url)
 
     def fetch(self, url: str) -> str:
+        if url in self.cache:
+            return self.cache[url]
         if not self.allowed(url):
             print(f"skip robots {url}")
             return ""
         self.pause_turn()
-        response = self.session.get(url, timeout=30)
+        response = self.session.get(url, timeout=(5, 12))
         response.raise_for_status()
         response.encoding = response.apparent_encoding or response.encoding
+        self.cache[url] = response.text
         return response.text
 
-    def sitemap_urls(self, sitemap_url: str, include: tuple[str, ...], seen: set[str] | None = None) -> list[str]:
+    def sitemap_urls(
+        self,
+        sitemap_url: str,
+        include: tuple[str, ...],
+        need: int,
+        known_urls: set[str],
+        seen: set[str] | None = None,
+    ) -> list[str]:
         seen = seen or set()
-        if sitemap_url in seen or not self.allowed(sitemap_url):
+        if need < 1 or sitemap_url in seen or not self.allowed(sitemap_url):
             return []
         seen.add(sitemap_url)
         try:
@@ -251,45 +289,54 @@ class PoliteFetcher:
         found: list[str] = []
         if tag == "sitemapindex":
             for node in root.findall("sm:sitemap/sm:loc", SITEMAP_NS):
+                if len(found) >= need:
+                    break
                 child = (node.text or "").strip()
                 if child and (not include or any(part.strip("/") in child for part in include)):
-                    found.extend(self.sitemap_urls(child, include, seen))
+                    found.extend(self.sitemap_urls(child, include, need - len(found), known_urls, seen))
             return found
         for node in root.findall("sm:url/sm:loc", SITEMAP_NS):
+            if len(found) >= need:
+                break
             loc = (node.text or "").strip()
-            if loc and any(part in loc for part in include):
+            if loc and loc not in known_urls and any(part in loc for part in include):
                 found.append(loc)
         return found
 
 
 def kanto_sources() -> list[dict]:
-    return [source for source in SOURCES if source["prefecture"] in KANTO]
+    selected = [source for source in SOURCES if source["prefecture"] in KANTO]
+    return selected + EXTRA_SOURCES
 
 
-def page_targets(fetcher: PoliteFetcher, source: dict, limit: int) -> list[str]:
+def unseen_urls(fetcher: PoliteFetcher, source: dict, need: int, known_urls: set[str]) -> list[str]:
+    if need < 1:
+        return []
     include = tuple(source.get("include") or ())
-    urls: list[str] = []
     if source.get("sitemap"):
-        urls.extend(fetcher.sitemap_urls(source["sitemap"], include or ("/",)))
-    else:
+        return fetcher.sitemap_urls(source["sitemap"], include or ("/",), need, known_urls)
+    urls = []
+    if source["home"] not in known_urls:
         urls.append(source["home"])
-        try:
-            html = fetcher.fetch(source["home"])
-        except requests.RequestException as exc:
-            print(f"fetch failed {source['home']}: {exc}")
-            html = ""
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
-            host = urlparse(source["home"]).netloc
-            news_include = include + ("news", "topics", "新着", "お知らせ", "public")
-            urls.extend(absolute_links(soup, source["home"], host, news_include))
-    deduped = []
+    try:
+        html = fetcher.fetch(source["home"])
+    except requests.RequestException as exc:
+        print(f"fetch failed {source['home']}: {exc}")
+        html = ""
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        host = urlparse(source["home"]).netloc
+        urls.extend(absolute_links(soup, source["home"], host, include + LINK_HINTS))
+    found = []
     seen = set()
     for url in urls:
-        if url not in seen and fetcher.allowed(url):
-            seen.add(url)
-            deduped.append(url)
-    return deduped[:limit]
+        if url in seen or url in known_urls or not fetcher.allowed(url):
+            continue
+        seen.add(url)
+        found.append(url)
+        if len(found) >= need:
+            break
+    return found
 
 
 def vendor_rows(html: str, url: str, source: dict, when: str) -> list[list[str]]:
@@ -298,7 +345,7 @@ def vendor_rows(html: str, url: str, source: dict, when: str) -> list[list[str]]
         cleaned = strip_contacts(snippet)
         for match in VENDOR_RE.finditer(cleaned):
             name = match.group(1)
-            if name in GENERIC_VENDOR:
+            if name in GENERIC_VENDOR or WEAK_VENDOR_RE.search(name):
                 continue
             row = make_row("ロケ弁", name, source["prefecture"], cleaned, url, when)
             if row:
@@ -306,80 +353,186 @@ def vendor_rows(html: str, url: str, source: dict, when: str) -> list[list[str]]
     return rows
 
 
-def collect(limit: int, pause: float) -> list[list[str]]:
-    fetcher = PoliteFetcher(pause)
-    when = stamp()
-    rows: list[list[str]] = []
-    seen_names: set[str] = set()
-    for source in kanto_sources():
-        print(f"\n[{source['prefecture']}] {source['site_name']}")
-        for url in page_targets(fetcher, source, limit):
-            try:
-                html = fetcher.fetch(url)
-            except requests.RequestException as exc:
-                print(f"fetch failed {url}: {exc}")
-                continue
-            if not html:
-                continue
-            record = extract_record(html, url, source)
-            if record and acceptable_facility(record["location_name"], record["address"]):
-                summary = record["scenes_category"] or "公開の撮影候補"
-                row = make_row(
-                    category_for(record["location_name"], summary, source["site_name"]),
-                    record["location_name"],
-                    record["address"] or source["prefecture"],
-                    summary,
-                    record["source_url"],
-                    when,
-                )
-                if row and norm_name(row[1]) not in seen_names:
-                    seen_names.add(norm_name(row[1]))
-                    rows.append(row)
-                    print(f"  候補: {row[0]} / {row[1]}")
-            for row in vendor_rows(html, url, source, when):
-                key = norm_name(row[1])
-                if key in seen_names:
-                    continue
-                seen_names.add(key)
-                rows.append(row)
-                print(f"  候補: {row[0]} / {row[1]}")
+def table_rows(soup: BeautifulSoup, url: str, source: dict, when: str) -> list[list[str]]:
+    rows = []
+    for table_row in soup.find_all("tr"):
+        cells = [clean_space(cell.get_text(" ", strip=True)) for cell in table_row.find_all("td")]
+        cells = [cell for cell in cells if cell]
+        if len(cells) < 2:
+            continue
+        name, area = cells[0], cells[1]
+        if not acceptable_facility(name, area):
+            continue
+        summary = cells[2] if len(cells) > 2 else "公開の撮影候補"
+        row = make_row(
+            category_for(name, summary, source["site_name"]),
+            name,
+            area,
+            summary,
+            url,
+            when,
+        )
+        if row:
+            rows.append(row)
     return rows
 
 
-def append_new(worksheet, rows: list[list[str]]) -> int:
-    known = existing_names(worksheet)
+def rows_from_html(html: str, url: str, source: dict, when: str) -> list[list[str]]:
+    rows = []
+    record = extract_record(html, url, source)
+    if record and acceptable_facility(record["location_name"], record["address"]):
+        summary = record["scenes_category"] or "公開の撮影候補"
+        row = make_row(
+            category_for(record["location_name"], summary, source["site_name"]),
+            record["location_name"],
+            record["address"] or source["prefecture"],
+            summary,
+            record["source_url"],
+            when,
+        )
+        if row:
+            rows.append(row)
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
+    rows.extend(table_rows(soup, url, source, when))
+    rows.extend(vendor_rows(html, url, source, when))
+    return rows
+
+
+def take_urls(fetcher: PoliteFetcher, source: dict, need: int, known_urls: set[str]) -> list[str]:
+    found = unseen_urls(fetcher, source, need, known_urls)
+    known_urls.update(found)
+    return found
+
+
+def collect(limit: int, pause: float, known_names: set[str], known_urls: set[str]) -> list[list[str]]:
+    fetcher = PoliteFetcher(pause)
+    when = stamp()
+    rows: list[list[str]] = []
+    seen_names = set(known_names)
+    fetches = 0
+    budget = min(FETCH_BUDGET, max(limit * 2, limit + 40))
+    sources = kanto_sources()
+    queues = []
+    for source in sources:
+        first = 80 if source.get("sitemap") else 3
+        print(f"\n[{source['prefecture']}] {source['site_name']}")
+        queues.append(take_urls(fetcher, source, first, known_urls))
+
+    def consume(url: str, source: dict) -> bool:
+        nonlocal fetches
+        if fetches >= budget or len(rows) >= limit:
+            return False
+        fetches += 1
+        try:
+            html = fetcher.fetch(url)
+        except requests.RequestException as exc:
+            print(f"fetch failed {url}: {exc}")
+            return True
+        if not html:
+            return True
+        for row in rows_from_html(html, url, source, when):
+            key = norm_name(row[1])
+            if not key or key in seen_names:
+                continue
+            seen_names.add(key)
+            rows.append(row)
+            print(f"  候補: {row[0]} / {row[1]}")
+            if len(rows) >= limit:
+                break
+        return True
+
+    while len(rows) < limit and fetches < budget and any(queues):
+        progressed = False
+        for source, queue in zip(sources, queues):
+            if not queue or len(rows) >= limit or fetches >= budget:
+                continue
+            consume(queue.pop(0), source)
+            progressed = True
+        if not progressed:
+            break
+
+    if len(rows) < limit and fetches < budget:
+        for source in sources:
+            if not source.get("sitemap") or len(rows) >= limit or fetches >= budget:
+                continue
+            extra = take_urls(fetcher, source, min(80, limit - len(rows)), known_urls)
+            for url in extra:
+                if len(rows) >= limit or fetches >= budget:
+                    break
+                consume(url, source)
+    print(f"\n読んだページ {fetches} / 上限 {budget}")
+    return rows
+
+
+def fresh_rows(rows: list[list[str]], known_names: set[str]) -> list[list[str]]:
     fresh = []
     for row in rows:
         key = norm_name(row[1])
-        if not key or key in known:
+        if not key or key in known_names:
             continue
-        known.add(key)
+        known_names.add(key)
         fresh.append(row)
-    if not fresh:
+    return fresh
+
+
+def append_batches(worksheet, rows: list[list[str]]) -> int:
+    if not rows:
         return 0
     ensure_header(worksheet)
-    worksheet.append_rows(fresh, value_input_option="USER_ENTERED")
-    return len(fresh)
+    for start in range(0, len(rows), SHEET_BATCH):
+        chunk = rows[start:start + SHEET_BATCH]
+        for attempt in range(3):
+            try:
+                worksheet.append_rows(chunk, value_input_option="RAW")
+                break
+            except gspread.exceptions.APIError as exc:
+                if "429" not in str(exc) or attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+        if start + SHEET_BATCH < len(rows):
+            time.sleep(1.1)
+    return len(rows)
+
+
+def sheet_index(worksheet) -> tuple[set[str], set[str]]:
+    names: set[str] = set()
+    urls: set[str] = set()
+    for index, row in enumerate(worksheet.get_all_values()):
+        if index == 0 and len(row) > 1 and clean_space(row[1]) == "名称":
+            continue
+        if len(row) > 1 and row[1].strip():
+            names.add(norm_name(row[1]))
+        if len(row) > 4 and row[4].strip():
+            urls.add(row[4].strip())
+    return names, urls
 
 
 def main():
     parser = argparse.ArgumentParser(description="関東の公開ロケ地・ロケ弁をスプレッドシートへ差分追記する")
-    parser.add_argument("--limit", type=int, default=6, help="各窓口で今回読むページ数")
+    parser.add_argument("--limit", type=int, default=MAX_RECORDS, help="1回で追記する最大件数")
     parser.add_argument("--pause", type=float, default=PAUSE, help="リクエスト間隔（秒）")
     parser.add_argument("--dry-run", action="store_true", help="収集だけ行い、シートには書かない")
     args = parser.parse_args()
     if args.limit < 1:
         raise SystemExit("--limit は 1 以上にしてください")
-    rows = collect(args.limit, args.pause)
+    known_names: set[str] = set()
+    known_urls: set[str] = set()
+    worksheet = None
+    if not args.dry_run:
+        client = authorize()
+        worksheet = open_sheet(client)
+        known_names, known_urls = sheet_index(worksheet)
+        print(f"既存 {len(known_names)} 件を照合")
+    rows = collect(args.limit, args.pause, known_names, known_urls)
     print(f"\n収集 {len(rows)} 件")
     if args.dry_run:
         for row in rows:
             print("\t".join(row))
         return
-    client = authorize()
-    worksheet = open_sheet(client)
-    added = append_new(worksheet, rows)
-    print(f"追記 {added} 件（既存の名称はスキップ）")
+    added = append_batches(worksheet, fresh_rows(rows, known_names))
+    print(f"追記 {added} 件（{SHEET_BATCH} 件ずつ、既存の名称はスキップ）")
 
 
 if __name__ == "__main__":
