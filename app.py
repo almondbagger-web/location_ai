@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -33,8 +34,8 @@ SYSTEM_INSTRUCTION = """
 
 ・トーン：知的で親しみやすく、結論ファースト。余計な自分語りや長い前置きはせず、現場の急ぎの状況を察してスパッと要点を伝える。
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
-・ロケ地相談時：架空の場所を捏造せず、与えられた実データ（過去実績やDB情報）をベースに『なぜここが条件に合うか』のプロの視点を添えて案内する。実データが無い特徴は断定しない。
-・実データがあるとき：先に推薦コメントを書き、その下へ実データだけのMarkdown箇条書きを置く。各項目は名前、所在地、実績。
+・ロケ地相談時：架空の場所を捏造せず、与えられた施設情報だけを使う。過去の撮影日、未解禁を含む作品名、撮影実績には一切触れない。案内するのは施設名・所在地・撮影受入条件・施設スペックだけ。実データに無い条件は断定しない。
+・実データがあるとき：先に推薦コメントを書き、利用条件があれば「【利用条件】」として添える。箇条書きは名前、所在地、利用条件または設備。作品名と撮影日は書かない。
 ・電話番号、メールアドレス、私的な個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
 ・URL、出典は書かない。実データにない日数、料金、最低注文数は作らない。
 ・代表：YUMITA（弓田）。株式会社ALMONDBAGGER 代表取締役。映画・ドラマの制作部として20年以上、ロケ手配、許認可、香盤、予算、現場統括を担う。八王子フィルムコミッションと連携し、AI Previs と AI VFX も手がける。アーティストとしても音楽活動をしている。肩書きの「日本一の制作部（自称）」「天才AIクリエイター（自称）」は本人の自称。
@@ -259,14 +260,98 @@ def blocked_place(name: str, address: str = "", site: str = "", detail: str = ""
     return is_office_document(raw_name, str(address or ""), str(site or ""))
 
 
+DATE_LEAK_RE = re.compile(
+    r"(?:令和|平成|昭和)\s*\d+\s*年|"
+    r"\d{4}\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?|"
+    r"\d{1,2}\s*月\s*\d{1,2}\s*日|"
+    r"[〇○]\s*月\s*[〇○0-9０-９]{0,2}\s*日|"
+    r"\d{4}-\d{1,2}-\d{1,2}|"
+    r"撮影日|ロケ日|使用日|収録日"
+)
+TITLE_MARK_RE = re.compile(r"[『「][^』」]{1,40}[』」]")
+CREDIT_RE = re.compile(r"撮影実績|過去番組|で使われた|の撮影で|ロケ実績|作品名|主演|出演作品|で撮影")
+CONDITION_RE = re.compile(r"土日|祝|平日|夜間|早朝|深夜|撮影可|要相談|要申請|申請|期限|事前|予約|休業|貸切|時間帯|利用条件|受入|受け入れ|曜日")
+SPEC_RE = re.compile(r"控室|支度|楽屋|駐車場|大型車|搬入|養生|電源|トイレ|待機|車両|車幅|ゲート|エレベーター|階段|荷下ろし|駐車")
+
+
+def strip_confidential(text: str) -> str:
+    raw = TITLE_MARK_RE.sub("", str(text or ""))
+    kept = []
+    for part in re.split(r"[。\n]", raw):
+        piece = part.strip(" 　")
+        if not piece or DATE_LEAK_RE.search(piece) or CREDIT_RE.search(piece):
+            continue
+        kept.append(piece)
+    return re.sub(r"\s+", " ", "。".join(kept)).strip("。 ")
+
+
+def split_facility_notes(text: str) -> tuple[str, str]:
+    cleaned = strip_confidential(text)
+    conditions: list[str] = []
+    specs: list[str] = []
+    for piece in re.split(r"[。／/、]", cleaned):
+        bit = piece.strip(" ・")
+        if not bit:
+            continue
+        if CONDITION_RE.search(bit):
+            conditions.append(bit)
+        elif SPEC_RE.search(bit):
+            specs.append(bit)
+    unique_cond = list(dict.fromkeys(conditions))
+    unique_spec = list(dict.fromkeys(specs))
+    return "、".join(unique_cond)[:140], "、".join(unique_spec)[:180]
+
+
+def public_facility(row: dict) -> tuple[str, str, str, str]:
+    name = redact_private(str(row.get("location_name") or "").strip())
+    address = redact_private(str(row.get("address") or "").strip())
+    blob = " ".join(
+        str(row.get(key) or "")
+        for key in ("accept_terms", "detail_text", "facility_spec")
+    )
+    conditions, specs = split_facility_notes(blob)
+    return name, address, conditions, specs
+
+
+def overlay_facility(into: dict, extra: dict) -> None:
+    into["works_title"] = ""
+    left_name, left_address, left_cond, left_spec = public_facility(into)
+    right_name, right_address, right_cond, right_spec = public_facility(extra)
+    conditions = "、".join(dict.fromkeys(part for part in (left_cond, right_cond) if part))
+    specs = "、".join(dict.fromkeys(part for part in (left_spec, right_spec) if part))
+    into["accept_terms"] = conditions
+    into["facility_spec"] = specs
+    if right_name and not left_name:
+        into["location_name"] = right_name
+    if right_address and not left_address:
+        into["address"] = right_address
+    note = " / ".join(
+        part for part in (
+            f"利用条件: {conditions}" if conditions else "",
+            f"設備: {specs}" if specs else "",
+        ) if part
+    )
+    if note:
+        into["detail_text"] = note
+
+
 def clean_visible_text(text: str) -> str:
     text = str(text or "")
+    held: list[str] = []
+
+    def hold(match: re.Match) -> str:
+        held.append(match.group(0))
+        return f"\u0000F{len(held) - 1}\u0000"
+
+    text = re.sub(r"```.*?```", hold, text, flags=re.S)
     text = re.sub(r"\[\[.*?\]\]", "", text, flags=re.S)
     text = re.sub(r"\[[^\]]+\]\((https?://[^\s)]+)\)", "", text)
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"(?im)^(?!.*\[連絡先は社内台帳参照\]).*?(?:出典|参照|参考リンク|参考文献|ソース|Sources|Grounding).*$", "", text)
     text = re.sub(r"\[\d+\]", "", text)
     text = redact_private(text)
+    text = strip_confidential(text)
+    text = re.sub(r"\u0000F(\d+)\u0000", lambda match: held[int(match.group(1))], text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -343,8 +428,18 @@ def candidate_item(line: str) -> str:
             if not address:
                 address = value.strip()
             continue
-        mark = "🍱" if label == "価格" else "🎬"
-        badges.append(f"<span class='spot-badge'>{mark} {html.escape(value.strip())}</span>")
+        if label == "実績" or CREDIT_RE.search(value) or DATE_LEAK_RE.search(value):
+            continue
+        if label in {"利用条件", "発注条件"} or CONDITION_RE.search(value):
+            shown = strip_confidential(value.strip())
+            if shown:
+                badges.append(f"<span class='spot-badge'>【利用条件】{html.escape(shown)}</span>")
+            continue
+        if SPEC_RE.search(value):
+            badges.append(f"<span class='spot-badge'>{html.escape(value.strip())}</span>")
+            continue
+        if label == "価格":
+            badges.append(f"<span class='spot-badge'>🍱 {html.escape(value.strip())}</span>")
     addr_html = f"<p class='spot-addr'>📍 {html.escape(address)}</p>" if address else ""
     badge_html = f"<p class='spot-badges'>{''.join(badges)}</p>" if badges else ""
     return f"<article class='spot'><h3>{html_name}</h3>{addr_html}{badge_html}</article>"
@@ -677,10 +772,10 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
     def learned_rows(active_terms: list[str]) -> list[dict]:
         try:
             learned_cols = set(get_table_columns("auto_learned_locations"))
-            needed = {"title", "work_name", "address", "description"}
+            needed = {"title", "address", "description"}
             if not needed <= learned_cols or not active_terms:
                 return []
-            fields = ["title", "work_name", "address", "description"]
+            fields = ["title", "address", "description"]
             id_sql = "id, " if "id" in learned_cols else ""
             clauses = []
             params: list[str] = []
@@ -690,7 +785,7 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
             where = " OR ".join(clauses)
             source = ", source_url" if "source_url" in learned_cols else ""
             sql = (
-                f"SELECT {id_sql}title, work_name, address, description{source} "
+                f"SELECT {id_sql}title, address, description{source} "
                 f"FROM auto_learned_locations WHERE ({where}) LIMIT {min(400, int(limit) * 8 + len(exclude_keys))}"
             )
             mapped = []
@@ -701,10 +796,16 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
                         "id": row["id"] if "id" in row.keys() else "",
                         "location_name": row["title"] or "",
                         "address": row["address"] or "",
-                        "works_title": row["work_name"] or "",
+                        "works_title": "",
+                        "accept_terms": "",
+                        "facility_spec": "",
                         "scenes_category": "",
                         "detail_text": row["description"] or "",
-                        "site_name": "番組別アーカイブ" if source_url.startswith("local-archive") else "auto_learned",
+                        "site_name": (
+                    "番組別アーカイブ" if source_url.startswith("local-archive")
+                    else "map-tool" if source_url.startswith("map-tool")
+                    else "auto_learned"
+                ),
                     }
                 )
             return mapped
@@ -756,13 +857,15 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
 def mix_location_hits(rows: list[dict], terms: list[str], limit: int, query: str = "") -> list[dict]:
     primary = terms[0] if terms else ""
     hints = [hint for hint in STYLE_HINTS if hint in (query or "")]
-    seen = set()
+    seen: dict[tuple[str, str], dict] = {}
     unique = []
     for row in rows:
         key = (str(row.get("location_name") or "").strip(), str(row.get("address") or "").strip())
         if key in seen:
+            overlay_facility(seen[key], row)
             continue
-        seen.add(key)
+        overlay_facility(row, row)
+        seen[key] = row
         unique.append(row)
 
     def region(row: dict) -> int:
@@ -910,12 +1013,14 @@ def format_archive(rows: list[dict]) -> str:
         address = str(row.get("address") or "").strip()
         if blocked_place(name, address, str(row.get("site_name") or ""), str(row.get("detail_text") or "")):
             continue
-        work = str(row.get("works_title") or "").strip()
-        scene = public_scene(str(row.get("scenes_category") or ""))
-        memo = field_memo(str(row.get("detail_text") or ""))
-        if not any((name, address, work, scene, memo)):
+        _, _, conditions, specs = public_facility(row)
+        if not any((name, address, conditions, specs)):
             continue
-        lines.append(f"- 施設: {name} / 住所: {address} / 過去番組実績: {work} / シーン: {scene} / 現場メモ: {memo}")
+        lines.append(
+            f"- 施設: {name} / 住所: {address}"
+            + (f" / 利用条件: {conditions}" if conditions else "")
+            + (f" / 設備: {specs}" if specs else "")
+        )
     return "\n".join(lines)
 
 
@@ -927,16 +1032,18 @@ def location_cards_html(rows: list[dict], with_lead: bool = True) -> str:
         raw_detail = str(row.get("detail_text") or "")
         if blocked_place(raw_name, raw_address, str(row.get("site_name") or ""), raw_detail):
             continue
-        name = html.escape(raw_name)
-        address = html.escape(raw_address)
-        work = html.escape(redact_private(str(row.get("works_title") or "").strip()))
+        safe_name, safe_address, conditions, specs = public_facility(row)
+        name = html.escape(safe_name or raw_name)
+        address = html.escape(safe_address or raw_address)
         address_html = f"<p class='loc-address'>{address}</p>" if address else ""
-        work_html = f"<p class='loc-meta'><span>実績</span>{work}</p>" if work else ""
+        cond_html = f"<p class='loc-meta'><span>利用条件</span>{html.escape(conditions)}</p>" if conditions else ""
+        spec_html = f"<p class='loc-meta'><span>設備</span>{html.escape(specs)}</p>" if specs else ""
         cards.append(
             "<article class='loc-card'>"
             f"<h3 class='loc-name'>{name}</h3>"
             f"{address_html}"
-            f"{work_html}"
+            f"{cond_html}"
+            f"{spec_html}"
             "</article>"
         )
     if not cards:
@@ -954,12 +1061,14 @@ def location_list_html(rows: list[dict], more: bool = False, with_lead: bool = T
         address = redact_private(str(row.get("address") or "").strip())
         if blocked_place(raw_name, address, str(row.get("site_name") or ""), str(row.get("detail_text") or "")):
             continue
-        work = redact_private(str(row.get("works_title") or "").strip())
+        _, _, conditions, specs = public_facility(row)
         line = f"<strong>{html.escape(raw_name)}</strong>"
         if address:
             line += f"（{html.escape(address)}）"
-        if work:
-            line += f" <span class='loc-work'>| 実績：{html.escape(work)}</span>"
+        if conditions:
+            line += f" <span class='loc-work'>| 【利用条件】{html.escape(conditions)}</span>"
+        if specs:
+            line += f" <span class='loc-work'>| {html.escape(specs)}</span>"
         items.append(f"<li>{line}</li>")
     if not items:
         return ""
@@ -1038,6 +1147,13 @@ def save_log_reply(row_id: int | None, reply: str):
 
 
 def save_new_location(title, work_name, address, description):
+    conditions, specs = split_facility_notes(str(description or ""))
+    safe_desc = " / ".join(
+        part for part in (
+            f"利用条件: {conditions}" if conditions else "",
+            f"設備: {specs}" if specs else "",
+        ) if part
+    )
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
@@ -1045,7 +1161,7 @@ def save_new_location(title, work_name, address, description):
             INSERT INTO auto_learned_locations (title, work_name, address, description, source_url)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (title, work_name, address, description, "Google Search Auto-Crawl"),
+            (title, "", address, safe_desc, "Google Search Auto-Crawl"),
         )
         conn.commit()
         conn.close()
@@ -1062,7 +1178,7 @@ def absorb_new_location(reply: str, allow_save: bool) -> str:
             data = json.loads(match.group(1))
             save_new_location(
                 data.get("title", ""),
-                data.get("work_name", ""),
+                "",
                 data.get("address", ""),
                 data.get("description", ""),
             )
@@ -1209,11 +1325,17 @@ def bento_reply(user_text: str, messages: list[dict] | None = None) -> str:
 def place_brief(rows: list[dict]) -> str:
     lines = []
     for row in rows[:8]:
-        name = redact_private(str(row.get("location_name") or "").strip())
-        address = redact_private(str(row.get("address") or "").strip()) or "住所記載なし"
-        work = redact_private(str(row.get("works_title") or "").strip()) or "実績記載なし"
-        if name:
-            lines.append(f"- {name} / {address} / 実績: {work}")
+        name, address, conditions, specs = public_facility(row)
+        if not name:
+            continue
+        bits = [name]
+        if address:
+            bits.append(address)
+        if conditions:
+            bits.append(f"利用条件: {conditions}")
+        if specs:
+            bits.append(f"設備: {specs}")
+        lines.append("- " + " / ".join(bits))
     return "\n".join(lines)
 
 
@@ -1233,7 +1355,7 @@ def ask_gemini(
             "実データが渡されている。このデータに無い施設名、店名、数字は作らない。"
             "紹介は2文まで。そのあと候補を箇条書きにする。"
             "1件につき必ず1行。行頭は「- 」。"
-            "形式は「- 施設名または店名 / 所在地 / 実績または価格」。所在地が無ければその欄は書かない。"
+            "形式は「- 施設名または店名 / 所在地 / 利用条件または設備または価格」。撮影日と作品名は書かない。利用条件があれば【利用条件】と書く。所在地が無ければその欄は書かない。"
             "1行の中に次の候補を続けない。"
         )
     elif not task:
@@ -1348,17 +1470,17 @@ def conversation_reply(
 def spot_cards_html(rows: list[dict]) -> str:
     cards = []
     for row in rows:
-        name = redact_private(str(row.get("location_name") or "").strip())
-        address = redact_private(str(row.get("address") or "").strip())
-        work = strip_scene_numbers(redact_private(str(row.get("works_title") or "").strip()))
-        memo = field_memo(str(row.get("detail_text") or ""))
+        name, address, conditions, specs = public_facility(row)
         if not name or blocked_place(name, address, str(row.get("site_name") or ""), str(row.get("detail_text") or "")):
             continue
         addr_html = f"<p class='spot-addr'>📍 {html.escape(address)}</p>" if address else ""
-        badge_html = f"<p class='spot-badges'><span class='spot-badge'>🎬 {html.escape(work)}</span></p>" if work else ""
+        badge_html = (
+            f"<p class='spot-badges'><span class='spot-badge'>【利用条件】{html.escape(conditions)}</span></p>"
+            if conditions else ""
+        )
         memo_html = (
-            f"<details class='spot-memo'><summary>現場メモ</summary><p>{html.escape(memo)}</p></details>"
-            if memo else ""
+            f"<details class='spot-memo'><summary>施設スペック</summary><p>{html.escape(specs)}</p></details>"
+            if specs else ""
         )
         cards.append(
             "<article class='spot'>"
@@ -1381,7 +1503,7 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
         if shown:
             remember_locations(shown, query, more)
         facts = place_brief(shown) or "（該当する記録なし）"
-        intro_task = "本文は2文だけ。施設名は箇条書きにしない。カードで出すので、条件に合う理由だけを短く書く。"
+        intro_task = "本文は2文だけ。施設名は箇条書きにしない。撮影日と作品名は書かない。利用条件があれば【利用条件】として1つ書く。カードで出すので、条件に合う理由だけを短く書く。"
         spoken = ask_gemini(user_text, messages or [], None, None, facts, intro_task)
         sentences = re.findall(r"[^。]+。", spoken or "")
         if sentences:
@@ -1397,48 +1519,62 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
 SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 
 
-def sheet_rows() -> list[dict]:
-    import time
-
-    cached = SHEET_CACHE.get("rows") or []
-    if cached and time.monotonic() - float(SHEET_CACHE.get("at") or 0) < 300:
-        return list(cached)
+def open_master_worksheet():
     raw = ""
     try:
         raw = str(st.secrets.get("GCP_SA_KEY", "") or "")
     except Exception:
         raw = ""
     raw = (raw or os.getenv("GCP_SA_KEY") or "").strip()
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
+    import gspread
+    from google.oauth2.service_account import Credentials
 
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        if raw:
-            creds = Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
-        elif (BASE / "google-credentials.json").is_file():
-            creds = Credentials.from_service_account_file(str(BASE / "google-credentials.json"), scopes=scopes)
-        else:
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    if raw:
+        creds = Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
+    elif (BASE / "google-credentials.json").is_file():
+        creds = Credentials.from_service_account_file(str(BASE / "google-credentials.json"), scopes=scopes)
+    else:
+        return None
+    book = gspread.authorize(creds).open("YUMI-CHA_ロケ地・お弁当マスター")
+    try:
+        return book.worksheet("シート1")
+    except gspread.WorksheetNotFound:
+        return book.sheet1
+
+
+def sheet_rows() -> list[dict]:
+    import time
+
+    cached = SHEET_CACHE.get("rows") or []
+    if cached and time.monotonic() - float(SHEET_CACHE.get("at") or 0) < 300:
+        return list(cached)
+    try:
+        worksheet = open_master_worksheet()
+        if worksheet is None:
             return []
-        book = gspread.authorize(creds).open("YUMI-CHA_ロケ地・お弁当マスター")
-        try:
-            worksheet = book.worksheet("シート1")
-        except gspread.WorksheetNotFound:
-            worksheet = book.sheet1
         rows = []
         for cells in worksheet.get_all_values()[1:]:
             category, name, area, summary = (cells + ["", "", "", ""])[:4]
             if not str(name).strip():
                 continue
+            conditions, specs = split_facility_notes(str(summary or ""))
             rows.append(
                 {
                     "location_name": str(name).strip(),
                     "address": str(area).strip(),
-                    "works_title": str(summary).strip() or str(category).strip(),
-                    "detail_text": "",
+                    "works_title": "",
+                    "accept_terms": conditions,
+                    "facility_spec": specs,
+                    "detail_text": " / ".join(
+                        part for part in (
+                            f"利用条件: {conditions}" if conditions else "",
+                            f"設備: {specs}" if specs else "",
+                        ) if part
+                    ),
                     "site_name": str(category).strip(),
                 }
             )
@@ -1470,7 +1606,10 @@ def search_sheet_keywords(query: str, limit: int = 8) -> list[dict]:
         return []
     ranked = []
     for row in sheet_rows():
-        blob = "".join(str(row.get(key) or "") for key in ("location_name", "address", "works_title", "site_name"))
+        blob = "".join(
+            str(row.get(key) or "")
+            for key in ("location_name", "address", "accept_terms", "facility_spec", "detail_text", "site_name")
+        )
         score = sum(1 for term in terms if term in blob)
         if is_bento_query(query) and not re.search(r"弁当|ケータリング|仕出し|ロケ弁", blob):
             continue
@@ -1478,6 +1617,275 @@ def search_sheet_keywords(query: str, limit: int = 8) -> list[dict]:
             ranked.append((score, row))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [row for _, row in ranked[:limit]]
+
+
+def payload_value(payload: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def split_map_locator(value: str) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return "", ""
+    if not re.match(r"https?://", text, re.I):
+        cleaned = DATE_LEAK_RE.sub("", strip_confidential(text)).strip(" 、/")
+        return cleaned, ""
+    parsed = urlparse(text)
+    query = parse_qs(parsed.query)
+    for key in ("address", "q", "query"):
+        if not query.get(key):
+            continue
+        candidate = unquote(query[key][0]).replace("+", " ").strip()
+        if re.match(r"^-?\d+(?:\.\d+)?\s*,\s*-?\d+", candidate):
+            continue
+        candidate = DATE_LEAK_RE.sub("", strip_confidential(candidate)).strip(" 、/")
+        if candidate and not candidate.lower().startswith("http"):
+            return candidate, text
+    matched = re.search(r"/place/([^/]+)", parsed.path or "")
+    if matched:
+        place = unquote(matched.group(1)).replace("+", " ").strip()
+        place = DATE_LEAK_RE.sub("", strip_confidential(place)).strip(" 、/")
+        if place:
+            return place, text
+    return "", text
+
+
+def scrub_map_url(url: str) -> str:
+    text = str(url or "").strip()
+    if not re.match(r"https?://", text, re.I):
+        return "map-tool"
+    parsed = urlparse(text)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    kept = []
+    for key, values in query.items():
+        if re.search(r"date|日付|撮影", key, re.I):
+            continue
+        for value in values:
+            decoded = unquote(value)
+            if DATE_LEAK_RE.search(decoded) or re.search(r"\d{4}-\d{1,2}-\d{1,2}", decoded):
+                continue
+            kept.append((key, value))
+    cleaned = parsed._replace(query=urlencode(kept, doseq=True)).geturl()
+    if DATE_LEAK_RE.search(unquote(cleaned)):
+        return "map-tool"
+    return f"map-tool:{cleaned}"
+
+
+def looks_like_address(text: str) -> bool:
+    return bool(re.search(r"都|道|府|県|区|市|町|村|丁目|\d", text or ""))
+
+
+def map_payload_items(payload) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("records", "locations", "items", "data"):
+            nested = payload.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        return [payload]
+    return []
+
+
+def normalize_map_record(payload: dict) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    payload_value(payload, ("撮影日", "日付", "shoot_date", "shot_date", "filming_date", "date", "map_date"))
+    name = DATE_LEAK_RE.sub("", strip_confidential(payload_value(payload, ("ロケ地名称", "施設名", "名称", "location_name", "name", "title", "map_name")))).strip(" 、/")
+    locator = payload_value(payload, ("地図URL/住所", "map_place"))
+    url = payload_value(payload, ("地図URL", "map_url", "mapUrl", "url"))
+    address = payload_value(payload, ("住所", "所在地", "address", "map_address"))
+    located, located_url = split_map_locator(locator)
+    if located_url and not url:
+        url = located_url
+    if not address and located:
+        address = located
+    if url and not looks_like_address(address):
+        url_text, _url = split_map_locator(url)
+        if looks_like_address(url_text):
+            address = url_text
+        elif not name:
+            name = url_text
+    address = DATE_LEAK_RE.sub("", strip_confidential(address)).strip(" 、/")
+    if re.match(r"https?://", address or "", re.I):
+        address = ""
+    room = payload_value(payload, ("支度部屋", "控室", "dressing_room", "green_room", "map_room"))
+    parking = payload_value(payload, ("駐車場", "parking", "map_parking"))
+    facility = payload_value(payload, ("支度部屋・駐車場", "設備", "facility", "specs", "map_facility"))
+    notes = []
+    if facility:
+        notes.append(facility)
+    conditions, specs = split_facility_notes("。".join(notes))
+    forced = []
+    for label, raw in (("支度部屋", room), ("駐車場", parking)):
+        cleaned = DATE_LEAK_RE.sub("", strip_confidential(raw)).strip(" 、/")
+        if not cleaned or CREDIT_RE.search(cleaned):
+            continue
+        forced.append(cleaned if label in cleaned else f"{label}: {cleaned}")
+    if forced:
+        specs = "、".join(dict.fromkeys(forced + ([specs] if specs else [])))[:180]
+    if not name or blocked_place(name, address, "map-tool", specs):
+        return None
+    detail = " / ".join(
+        part for part in (
+            f"利用条件: {conditions}" if conditions else "",
+            f"設備: {specs}" if specs else "",
+        ) if part
+    )
+    safe_url = url if re.match(r"https?://", url or "", re.I) else ""
+    record = {
+        "location_name": name,
+        "address": address,
+        "works_title": "",
+        "accept_terms": conditions,
+        "facility_spec": specs,
+        "detail_text": detail,
+        "source_url": scrub_map_url(safe_url),
+        "site_name": "map-tool",
+    }
+    if not acceptable_public_row(record):
+        return None
+    return record
+
+
+def upsert_learned_location(record: dict) -> bool:
+    name = str(record.get("location_name") or "").strip()
+    address = str(record.get("address") or "").strip()
+    if not name:
+        return False
+    conditions = str(record.get("accept_terms") or "").strip()
+    specs = str(record.get("facility_spec") or "").strip()
+    source = str(record.get("source_url") or "map-tool")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute(
+            """
+            SELECT id, description, source_url FROM auto_learned_locations
+            WHERE title = ? AND IFNULL(address, '') = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (name, address),
+        ).fetchone()
+        if row:
+            old_cond, old_spec = split_facility_notes(str(row[1] or ""))
+            conditions = "、".join(dict.fromkeys(part for part in (old_cond, conditions) if part))
+            specs = "、".join(dict.fromkeys(part for part in (old_spec, specs) if part))
+            description = " / ".join(
+                part for part in (
+                    f"利用条件: {conditions}" if conditions else "",
+                    f"設備: {specs}" if specs else "",
+                ) if part
+            )
+            kept_source = str(row[2] or "")
+            if not kept_source.startswith("local-archive"):
+                kept_source = source
+            conn.execute(
+                """
+                UPDATE auto_learned_locations
+                SET work_name = '', description = ?, source_url = ?
+                WHERE id = ?
+                """,
+                (description, kept_source, row[0]),
+            )
+        else:
+            description = str(record.get("detail_text") or "")
+            conn.execute(
+                """
+                INSERT INTO auto_learned_locations (title, work_name, address, description, source_url)
+                VALUES (?, '', ?, ?, ?)
+                """,
+                (name, address, description, source),
+            )
+        conn.commit()
+        conn.close()
+        record["accept_terms"] = conditions
+        record["facility_spec"] = specs
+        record["detail_text"] = description
+        record["works_title"] = ""
+        return True
+    except Exception:
+        return False
+
+
+def upsert_master_sheet(record: dict) -> bool:
+    import time
+
+    name = str(record.get("location_name") or "").strip()
+    if not name:
+        return False
+    try:
+        worksheet = open_master_worksheet()
+        if worksheet is None:
+            return False
+        values = worksheet.get_all_values()
+        summary_cond, summary_spec = split_facility_notes(str(record.get("detail_text") or ""))
+        conditions = "、".join(dict.fromkeys(part for part in (summary_cond, record.get("accept_terms") or "") if part))
+        specs = "、".join(dict.fromkeys(part for part in (summary_spec, record.get("facility_spec") or "") if part))
+        summary = " / ".join(
+            part for part in (
+                f"利用条件: {conditions}" if conditions else "",
+                f"設備: {specs}" if specs else "",
+            ) if part
+        )
+        for index, cells in enumerate(values[1:], start=2):
+            current = str(cells[1] if len(cells) > 1 else "").strip()
+            if current != name:
+                continue
+            current_address = str(cells[2] if len(cells) > 2 else "").strip()
+            old_cond, old_spec = split_facility_notes(str(cells[3] if len(cells) > 3 else ""))
+            conditions = "、".join(dict.fromkeys(part for part in (old_cond, conditions) if part))
+            specs = "、".join(dict.fromkeys(part for part in (old_spec, specs) if part))
+            summary = " / ".join(
+                part for part in (
+                    f"利用条件: {conditions}" if conditions else "",
+                    f"設備: {specs}" if specs else "",
+                ) if part
+            )
+            address = str(record.get("address") or "").strip() or current_address
+            worksheet.update(
+                range_name=f"C{index}:D{index}",
+                values=[[address, summary]],
+                value_input_option="RAW",
+            )
+            SHEET_CACHE["at"] = 0.0
+            return True
+        worksheet.append_row(
+            [
+                "ロケ地",
+                name,
+                str(record.get("address") or "").strip(),
+                summary,
+                str(record.get("source_url") or "map-tool"),
+                time.strftime("%Y-%m-%d %H:%M"),
+            ],
+            value_input_option="RAW",
+        )
+        SHEET_CACHE["at"] = 0.0
+        return True
+    except Exception:
+        return False
+
+
+def merge_map_records(payload) -> list[dict]:
+    merged = []
+    for item in map_payload_items(payload):
+        record = normalize_map_record(item)
+        if not record:
+            continue
+        if not upsert_learned_location(record):
+            continue
+        upsert_master_sheet(record)
+        merged.append(record)
+    return merged
 
 
 def ledger_fallback(user_text: str) -> tuple[str, bool]:
@@ -1919,15 +2327,15 @@ def apply_theme():
         margin: 0;
         padding: 8px 10px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.72);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: #ffffff;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        border: 1px solid rgba(148, 163, 184, 0.45);
         box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
     }
     .st-key-composer:focus-within {
-        border-color: rgba(56, 189, 248, 0.9);
-        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12), 0 0 0 4px rgba(56, 189, 248, 0.16), 0 0 22px rgba(56, 189, 248, 0.32);
+        border-color: #ef4444;
+        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12), 0 0 0 3px rgba(239, 68, 68, 0.22);
     }
     .st-key-composer [data-testid="stHorizontalBlock"] {
         align-items: center !important;
@@ -1969,13 +2377,24 @@ def apply_theme():
         height: 52px; border-radius: 999px !important;
         border: 1px solid rgba(148, 163, 184, 0.45) !important;
         padding: 0 100px 0 20px !important;
-        background: rgba(255, 255, 255, 0.55) !important;
+        background: #ffffff !important;
+        background-color: #ffffff !important;
+        color: #111827 !important;
+        -webkit-text-fill-color: #111827 !important;
+        caret-color: #111827;
         box-shadow: none;
         font-size: 15px !important;
     }
+    .st-key-composer [data-testid="stTextInput"] input::placeholder {
+        color: #6b7280 !important;
+        -webkit-text-fill-color: #6b7280 !important;
+    }
     .st-key-composer [data-testid="stTextInput"] input:focus {
-        border-color: rgba(56, 189, 248, 0.95) !important;
-        box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.16), 0 0 18px rgba(56, 189, 248, 0.28);
+        background: #ffffff !important;
+        background-color: #ffffff !important;
+        border-color: #ef4444 !important;
+        outline: 2px solid #ef4444 !important;
+        box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.18);
     }
     .st-key-composer [data-testid="stFormSubmitButton"] {
         position: relative !important;
@@ -2145,6 +2564,78 @@ def reset_chat():
 
 def toggle_cm():
     st.session_state.show_cm = not st.session_state.get("show_cm", False)
+
+
+MAP_QUERY_KEYS = (
+    "map_payload",
+    "map_name",
+    "map_date",
+    "map_url",
+    "map_address",
+    "map_place",
+    "map_room",
+    "map_parking",
+    "map_facility",
+    "ロケ地名称",
+    "撮影日",
+    "地図URL",
+    "住所",
+    "地図URL/住所",
+    "支度部屋",
+    "駐車場",
+    "支度部屋・駐車場",
+)
+
+
+def query_value(key: str) -> str:
+    if key not in st.query_params:
+        return ""
+    value = st.query_params[key]
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def consume_map_payload():
+    if not any(key in st.query_params for key in MAP_QUERY_KEYS):
+        return
+    payload = None
+    raw = query_value("map_payload")
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = None
+    named = query_value("map_name") or query_value("ロケ地名称")
+    located = query_value("map_place") or query_value("地図URL/住所")
+    if payload is None and (named or located or query_value("map_url") or query_value("地図URL")):
+        payload = {
+            "ロケ地名称": named,
+            "撮影日": query_value("map_date") or query_value("撮影日"),
+            "地図URL": query_value("map_url") or query_value("地図URL"),
+            "住所": query_value("map_address") or query_value("住所"),
+            "地図URL/住所": located,
+            "支度部屋": query_value("map_room") or query_value("支度部屋"),
+            "駐車場": query_value("map_parking") or query_value("駐車場"),
+            "支度部屋・駐車場": query_value("map_facility") or query_value("支度部屋・駐車場"),
+        }
+    for key in MAP_QUERY_KEYS:
+        if key in st.query_params:
+            del st.query_params[key]
+    if not payload:
+        return
+    merged = merge_map_records(payload)
+    if not merged:
+        return
+    names = "、".join(record["location_name"] for record in merged[:8])
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": f"地図ツクールの施設情報を検索対象に追加しました。{names}",
+            "html": False,
+        }
+    )
+    st.rerun()
 
 
 def consume_speech():
@@ -2364,6 +2855,7 @@ def main():
     st.session_state.setdefault("pending_image", None)
     st.session_state.setdefault("shown_locations", [])
     st.session_state.setdefault("last_location_query", "")
+    consume_map_payload()
     consume_speech()
     avatar_b64 = file_b64(AVATAR_PATH)
     render_sidebar()
