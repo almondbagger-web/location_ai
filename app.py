@@ -114,7 +114,8 @@ SYSTEM_INSTRUCTION = """
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
 ・ロケ地相談時：撮影日、未解禁を含む作品名、俳優名、撮影実績には触れない。個人の自宅は出さない。案内はロケ地（施設・店舗・公園の正式名称）、住所（都道府県と市区町村）、シーン（取調室、屋上対峙、オフィス会議のような状況名）、条件だけ。シーンが特定できなければ「汎用撮影」。特徴の長文は書かない。新宿区・港区のような行政区名だけを施設名にしない。
 ・「該当する実データはございません」「施設データはございません」「記録がありません」など、候補が無いと終わる返答は禁止。
-・ロケ地は東京を優先し、1〜3件で終わらせない。実在施設を10件以上出す。説明文は書かず、JSON配列だけを返す。各要素は {"name":"施設の正式名称","address":"都道府県と市区町村","condition":"撮影条件"}。1要素に1施設。条件が不明なら「要相談」。
+・ロケ地の一覧はアプリが箇条書きにする。JSON、配列、{"name": ...} は絶対に書かない。
+・1施設の条件やシーンを聞かれたら、その施設だけを文章で答える。撮影受入条件（土日祝、夜間、事前申請）と、向いているシーン、搬入の要点を書く。作品名、撮影日、URLは書かない。
 ・お弁当は1店舗につき1ブロック。店舗名、エリア、価格帯、配達条件を分け、1行に複数店をカンマやスラッシュで繋げない。最低注文数は実データに無い数字を作らない。
 ・電話番号、メールアドレス、私的な個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
 ・URL、出典は書かない。実データにない日数、料金、最低注文数は作らない。
@@ -865,7 +866,7 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
     quoted = ", ".join(f'"{name}"' for name in use)
     school_sql, school_params = school_filter_sql(columns) if school else ("", [])
     order_sql = f" ORDER BY {region_rank_sql()}, id" if "address" in columns else " ORDER BY id"
-    fetch_limit = min(500, 80 + len(exclude_keys) * 2 + int(limit) * (8 if school else 12))
+    fetch_limit = min(8000, max(800, int(limit or 8000)))
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
 
@@ -968,7 +969,7 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
         if not found and terms:
             found = materialize(run([max(terms, key=len)], "OR"))
         conn.close()
-        pool_cap = min(240, max(int(limit), int(limit) + len(exclude_keys) + 40))
+        pool_cap = max(int(limit or 8000), 40)
         ranked = mix_location_hits(found, terms, pool_cap, query)
         if exclude_keys:
             ranked = [row for row in ranked if location_key(row) not in exclude_keys]
@@ -1216,6 +1217,18 @@ def remember_locations(rows: list[dict], query: str, more: bool):
         keys = [location_key(row) for row in rows]
         st.session_state.shown_locations = prev + [key for key in keys if key not in prev]
         st.session_state.last_location_query = query
+        listed = []
+        for row in rows[:120]:
+            listed.append(
+                {
+                    "location_name": str(row.get("location_name") or ""),
+                    "address": str(row.get("address") or ""),
+                    "scene": str(row.get("scene") or row.get("scenes_category") or ""),
+                    "condition": str(row.get("condition") or row.get("accept_terms") or ""),
+                    "facility_spec": str(row.get("facility_spec") or ""),
+                }
+            )
+        st.session_state.last_listed_places = listed
     except Exception:
         pass
 
@@ -1414,7 +1427,10 @@ RAMBLE_RE = re.compile(r"お疲れ様|胃がキリキリ|（笑）|\(笑\)|了�
 def guard_speech(text: str) -> str:
     from location_hygiene import person_names
 
-    cleaned = strip_scene_numbers(clean_visible_text(text))
+    cleaned = re.sub(r"```(?:json)?\s*.*?```", "", str(text or ""), flags=re.S | re.I)
+    cleaned = re.sub(r"\[\s*\{[\s\S]*?\}\s*\]", "", cleaned)
+    cleaned = re.sub(r"\{[^{}]{0,500}\"(?:name|address|condition)\"[^{}]{0,500}\}", "", cleaned)
+    cleaned = strip_scene_numbers(clean_visible_text(cleaned))
     if len(set(person_names(cleaned))) >= 2:
         cleaned = re.sub(r"[一-龥々]{1,5}さん", "", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -1538,7 +1554,7 @@ def ask_gemini(
             "実データが渡されている。このデータに無い施設名、店名、数字は作らない。"
             "紹介は2文まで。そのあと候補を箇条書きにする。"
             "1件につき必ず1行。行頭は「- 」。"
-            "ロケ地なら10件以上。JSON配列だけ。各要素は {\"name\":\"施設の正式名称\",\"address\":\"都道府県と市区町村\",\"condition\":\"撮影条件\"}。行政区名だけを name にしない。お弁当なら1店舗につき1ブロックで、店名、エリア、価格帯、配達条件を改行する。"
+            "JSONや {\"name\": ...} は書かない。ロケ地の列挙はしない。お弁当なら1店舗につき1ブロックで、店名、エリア、価格帯、配達条件を改行する。"
             "撮影日と作品名は書かない。1行の中に次の候補を続けない。"
         )
     elif not task:
@@ -1724,16 +1740,21 @@ def format_address(text: str) -> str:
     raw = re.sub(r"[\s　\u200e]", "", str(text or ""))
     raw = re.sub(r"^〒?\d{3}-?\d{4}", "", raw)
     pref = ""
+    rest = raw
     matched = PREFECTURE_RE.search(raw)
     if matched:
         pref = matched.group(0)
-    locals_ = re.findall(r"[一-龥]{1,8}(?:市|区|町|村)", raw)
-    local = ""
-    if locals_:
-        local = locals_[0]
-        if len(locals_) >= 2 and local.endswith(("市", "郡")) and locals_[1].endswith(("区", "町", "村")):
-            local = local + locals_[1]
-    return f"{pref}{local}"
+        rest = raw[matched.end():]
+        while rest.startswith(pref):
+            rest = rest[len(pref):]
+    locals_ = re.findall(r"[一-龥]{1,6}(?:市|区|町|村)", rest)
+    local = locals_[0] if locals_ else ""
+    if len(locals_) >= 2 and local.endswith(("市", "郡")) and locals_[1].endswith(("区", "町", "村")):
+        local = local + locals_[1]
+    shown = f"{pref}{local}"
+    while pref and shown.startswith(pref + pref):
+        shown = shown[len(pref):]
+    return shown
 
 
 def short_condition(text: str, own_name: str = "") -> str:
@@ -1873,30 +1894,21 @@ def facility_triples(parts: list[str]) -> list[tuple[str, str, str]]:
 
 
 def spot_cards_html(rows: list[dict]) -> str:
-    cards = []
+    lines = []
     seen = set()
     for row in rows:
         for place in expand_place_rows(row):
             name = place["location_name"]
-            key = re.sub(r"\s+", "", name)
+            address = format_address(place.get("address") or "") or "要確認"
+            scene = (place.get("scene") or "汎用撮影").replace(" / ", "・")
+            key = re.sub(r"\s+", "", name) + "|" + address
             if key in seen:
                 continue
             seen.add(key)
-            address = place.get("address") or "要確認"
-            scene = place.get("scene") or "汎用撮影"
-            condition = place.get("condition") or "要相談"
-            index = len(cards) + 1
-            cards.append(
-                "<article class='spot'>"
-                f"<h3><span class='spot-no'>{index}</span>ロケ地: {html.escape(name)}</h3>"
-                f"<p class='spot-addr'>住所: {html.escape(address)}</p>"
-                f"<p class='spot-scene'>シーン: {html.escape(scene)}</p>"
-                f"<p class='spot-cond'>条件: {html.escape(condition)}</p>"
-                "</article>"
-            )
-    if not cards:
+            lines.append(f"・{html.escape(name)}：{html.escape(address)}【{html.escape(scene)}】")
+    if not lines:
         return ""
-    return "<div class='spot-list'>" + "".join(cards) + "</div>"
+    return "<div class='line-list'>" + "<br>".join(lines) + "</div>"
 
 
 def drop_empty_claims(text: str) -> str:
@@ -2015,8 +2027,8 @@ def master_location_rows() -> list[dict]:
         return cached
 
 
-def search_master_locations(query: str, limit: int = 40) -> list[dict]:
-    terms = scene_search_terms(query) or search_terms(query)
+def search_master_locations(query: str, limit: int = 0) -> list[dict]:
+    terms = scene_search_terms(query) or sheet_keywords(query)
     if not terms:
         return []
     ranked = []
@@ -2031,25 +2043,44 @@ def search_master_locations(query: str, limit: int = 40) -> list[dict]:
             score += 3
         ranked.append((score, row))
     ranked.sort(key=lambda item: item[0], reverse=True)
-    return [row for _, row in ranked[:limit]]
+    found = [row for _, row in ranked]
+    return found if limit <= 0 else found[:limit]
 
 
-def gather_location_rows(query: str, limit: int = 40, exclude_keys: set[str] | None = None) -> list[dict]:
+def listed_key(row: dict) -> str:
+    name = re.sub(r"\s+", "", str(row.get("location_name") or ""))
+    address = re.sub(r"\s+", "", format_address(str(row.get("address") or "")))
+    return f"{name}|{address}"
+
+
+def unique_listed(rows: list[dict]) -> list[dict]:
+    seen = set()
+    unique = []
+    for row in rows:
+        key = listed_key(row)
+        if key in {"|", ""} or key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
+
+
+def gather_location_rows(query: str, limit: int = 8000, exclude_keys: set[str] | None = None) -> list[dict]:
     pool: list[dict] = []
     try:
-        pool.extend(search_sheet_keywords(query, limit=limit))
+        pool.extend(search_sheet_keywords(query, limit=0))
     except Exception:
         pass
     try:
         pool.extend(search_local_locations(query, limit=limit, exclude_keys=exclude_keys) or [])
     except Exception:
         pass
-    if len(unique_places(pool)) < 10:
-        try:
-            pool.extend(search_master_locations(query, limit=limit))
-        except Exception:
-            pass
-    return prefer_tokyo(unique_places(pool))[:limit]
+    try:
+        pool.extend(search_master_locations(query, limit=0))
+    except Exception:
+        pass
+    found = prefer_tokyo(unique_listed(pool))
+    return found if limit <= 0 else found[:limit]
 
 
 def suggest_location_rows(user_text: str, existing: list[dict], messages: list[dict] | None) -> list[dict]:
@@ -2069,38 +2100,110 @@ def suggest_location_rows(user_text: str, existing: list[dict], messages: list[d
     return parse_location_lines(spoken)
 
 
+DETAIL_RE = re.compile(r"撮影条件|受入条件|条件は|条件を|どんなシーン|何のシーン|シーンで|詳しく|詳細|搬入|事前申請|夜間|土日")
+
+
+def is_detail_question(text: str) -> bool:
+    raw = text or ""
+    if not DETAIL_RE.search(raw):
+        return False
+    if re.search(r"作り方|配合|合成|探して|候補|リスト", raw):
+        return False
+    compact = re.sub(r"\s+", "", raw)
+    remembered: list[dict] = []
+    try:
+        remembered = list(st.session_state.get("last_listed_places") or [])
+    except Exception:
+        remembered = []
+    if any(re.sub(r"\s+", "", str(row.get("location_name") or "")) in compact for row in remembered if len(str(row.get("location_name") or "")) >= 3):
+        return True
+    if re.search(r"この|その|さっき", raw):
+        return True
+    if re.search(r"詳しく|詳細", raw) and remembered and not re.search(r"学校|病院|オフィス|公園|スタジオ", raw):
+        return True
+    stripped = re.sub(
+        r"撮影条件|受入条件|条件は|条件を|どんなシーン|何のシーン|シーンで撮影された|シーンで|詳しく|詳細|搬入|事前申請|夜間|土日祝|土日|教えて|ください|は|の|を|？|\?",
+        "",
+        compact,
+    )
+    for word in ("学校", "病院", "オフィス", "公園", "スタジオ", "カフェ", "ロケ地"):
+        stripped = stripped.replace(word, "")
+    return len(stripped) >= 2
+
+
+def detail_places(user_text: str) -> list[dict]:
+    compact = re.sub(r"\s+", "", user_text or "")
+    remembered: list[dict] = []
+    try:
+        remembered = list(st.session_state.get("last_listed_places") or [])
+    except Exception:
+        remembered = []
+    named = [row for row in remembered if re.sub(r"\s+", "", str(row.get("location_name") or "")) in compact]
+    if named:
+        return named[:3]
+    found = gather_location_rows(user_text, limit=8)
+    if found:
+        return found[:3]
+    return remembered[:1]
+
+
+def detail_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
+    places = detail_places(user_text)
+    facts = []
+    for row in places:
+        name, address, conditions, specs = public_facility(row)
+        scene = abstract_scene(str(row.get("scene") or row.get("scenes_category") or ""))
+        address = format_address(address) or address
+        facts.append(
+            "\n".join(
+                part for part in (
+                    f"施設名: {name}",
+                    f"住所: {address}",
+                    f"シーン: {scene}",
+                    f"撮影受入条件: {conditions or '要相談'}",
+                    f"搬入・設備: {specs}" if specs else "",
+                ) if part
+            )
+        )
+    spoken = ask_gemini(
+        user_text,
+        messages or [],
+        None,
+        None,
+        "\n\n".join(facts) or "（この施設の台帳行はまだない）",
+        "この質問の施設だけを、4文から6文で答える。JSONは書かない。"
+        "撮影受入条件は土日祝、夜間、事前申請が分かれば書く。不明なら要相談。"
+        "向いているシーンと搬入の要点を続ける。作品名、撮影日、俳優名、URL、電話番号は書かない。",
+    )
+    spoken = drop_empty_claims(spoken)
+    if not spoken and facts:
+        head = places[0]
+        name = str(head.get("location_name") or "")
+        address = format_address(str(head.get("address") or ""))
+        scene = abstract_scene(str(head.get("scene") or head.get("scenes_category") or ""))
+        condition = str(head.get("condition") or head.get("accept_terms") or "") or "要相談"
+        spoken = f"{name}（{address}）の撮影受入は{condition}です。向いているシーンは{scene}です。搬入や夜間の細目は、施設ごとの事前申請で確認します。"
+    if not spoken:
+        return "", False
+    return f"<div class='bubble'>{rich_text(spoken)}</div>", True
+
+
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
     try:
+        if is_detail_question(user_text):
+            return detail_reply(user_text, messages)
         more = is_more_request(user_text)
         query = followup_query(user_text) if more else user_text
         exclude = shown_location_keys(more)
-        rows = gather_location_rows(query, limit=40, exclude_keys=exclude) if str(query or "").strip() else []
-        if len(rows) < 10:
-            rows = prefer_tokyo(unique_places(rows + suggest_location_rows(user_text, rows, messages)))
-        if len(rows) < 10:
-            rows = prefer_tokyo(unique_places(rows + suggest_location_rows(user_text, rows, messages)))
-        shown = rows[:40]
-        if shown:
-            remember_locations(shown, query, more)
-        listing = spot_cards_html(shown)
-        intro = ""
-        if shown:
-            intro = ask_gemini(
-                user_text,
-                messages or [],
-                None,
-                None,
-                "",
-                "前置きは1文だけ。施設名は列挙しない。候補が無いとは書かない。撮影日と作品名は書かない。",
-            )
-            intro = drop_empty_claims(intro)
-            sentences = re.findall(r"[^。]+。", intro or "")
-            if sentences:
-                intro = sentences[0]
+        rows = gather_location_rows(query, limit=8000, exclude_keys=exclude) if str(query or "").strip() else []
+        if not rows:
+            rows = unique_listed(suggest_location_rows(user_text, rows, messages))
+        if rows:
+            remember_locations(rows, query, more)
+        listing = spot_cards_html(rows)
         if not listing:
             return "", False
-        bubble = f"<div class='bubble'>{rich_text(intro)}</div>" if intro else ""
-        return f"{bubble}{listing}", True
+        return listing, True
     except Exception:
         return "", False
 
@@ -2230,7 +2333,8 @@ def search_sheet_keywords(query: str, limit: int = 40) -> list[dict]:
             score += 1
         ranked.append((score, row))
     ranked.sort(key=lambda item: item[0], reverse=True)
-    return [row for _, row in ranked[:limit]]
+    found = [row for _, row in ranked]
+    return found if limit <= 0 else found[:limit]
 
 
 def payload_value(payload: dict, keys: tuple[str, ...]) -> str:
@@ -2569,6 +2673,11 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, reply.startswith("<")
+    if is_detail_question(user_text):
+        reply, as_html = detail_reply(user_text, messages)
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
     if is_scene_search(user_text):
         reply, as_html = location_reply(user_text, messages)
         row_id = log_search_query(user_text)
@@ -2799,6 +2908,7 @@ def apply_theme():
     }
     .loc-lead { margin: 0 0 12px; color: #334155; font-size: 14px; }
     .talk { margin: 0 0 14px; color: #1e293b; font-size: 0.98rem; line-height: 1.75; }
+    .line-list { margin: 8px 0 0; color: #0f172a; font-size: 0.98rem; line-height: 1.75; }
     .spot-list { margin: 12px 0 0; display: flex; flex-direction: column; gap: 12px; }
     .spot {
         display: block; margin: 0; padding: 14px 16px; border-radius: 16px;
