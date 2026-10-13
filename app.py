@@ -36,8 +36,8 @@ SYSTEM_INSTRUCTION = """
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
 ・ロケ地相談時：撮影日、未解禁を含む作品名、撮影実績には触れない。案内は施設名・エリア・特徴・撮影受入条件だけ。個人の自宅は出さない。
 ・「該当する実データはございません」「施設データはございません」「記録がありません」など、候補が無いと終わる返答は禁止。
-・台帳が3件以上あるとき：渡された施設だけを使い、足さない。
-・台帳が3件未満のとき：関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）で実在し、フィルムコミッションが案内する公共施設・撮影受け入れ施設を足して、合計3〜5件にする。各件は1行。「- 施設名 / 市区町村 / 特徴。【利用条件】土日祝・平日・夜間などの受入」。
+・ロケ地は東京を優先し、1〜3件で終わらせない。実在施設を10件以上、該当するものは続けて出す。各件は1行。「- 施設名 / 市区町村 / 受入条件・特記（土日、夜間、搬入）」。撮影日と作品名は書かない。
+・お弁当は1店舗につき1ブロック。店舗名、エリア、価格帯、配達条件を分け、1行に複数店をカンマやスラッシュで繋げない。最低注文数は実データに無い数字を作らない。
 ・電話番号、メールアドレス、私的な個人名、部屋番号、台本のシーン番号は書かない。連絡先は「連絡先は社内台帳で確認します」。
 ・URL、出典は書かない。実データにない日数、料金、最低注文数は作らない。
 ・代表：YUMITA（弓田）。株式会社ALMONDBAGGER 代表取締役。映画・ドラマの制作部として20年以上、ロケ手配、許認可、香盤、予算、現場統括を担う。八王子フィルムコミッションと連携し、AI Previs と AI VFX も手がける。アーティストとしても音楽活動をしている。肩書きの「日本一の制作部（自称）」「天才AIクリエイター（自称）」は本人の自称。
@@ -445,7 +445,7 @@ def candidate_item(line: str) -> str:
             continue
         if label == "価格":
             badges.append(f"<span class='spot-badge'>🍱 {html.escape(value.strip())}</span>")
-    addr_html = f"<p class='spot-addr'>📍 {html.escape(address)}</p>" if address else ""
+    addr_html = f"<p class='spot-addr'>エリア: {html.escape(address)}</p>" if address else ""
     badge_html = f"<p class='spot-badges'>{''.join(badges)}</p>" if badges else ""
     return f"<article class='spot'><h3>{html_name}</h3>{addr_html}{badge_html}</article>"
 
@@ -1353,8 +1353,64 @@ def bento_facts(user_text: str) -> str:
     return text.strip() or "（該当する店の記録なし）"
 
 
+def bento_cards_html(user_text: str) -> str:
+    try:
+        from guild_knowledge import bento_for_query, shop_order_fields
+    except Exception:
+        return ""
+    try:
+        shops = bento_for_query(user_text, limit=40)
+    except Exception:
+        shops = []
+    cards = []
+    for shop in shops or []:
+        try:
+            fields = shop_order_fields(shop)
+        except Exception:
+            continue
+        name = str(shop.get("name") or "").strip()
+        if not name:
+            continue
+        area = clean_bento_clause(str(shop.get("area") or ""))
+        if re.search(r"番号|電話", area):
+            area = ""
+        title = html.escape(name)
+        if area:
+            title += f"（{html.escape(area)}）"
+        lines = [f"<h3>🍱 {title}</h3>"]
+        price = clean_bento_clause(str(fields.get("価格帯") or ""))
+        if price and "記載なし" not in price:
+            lines.append(f"<p class='spot-feature'>価格帯: {html.escape(price)}</p>")
+        delivery = []
+        for key in ("配達エリア・最低注文個数", "注文締切"):
+            bit = clean_bento_clause(str(fields.get(key) or ""))
+            if bit and "記載なし" not in bit and not re.search(r"電話|連絡", bit):
+                delivery.append(bit)
+        if delivery:
+            lines.append(f"<p class='spot-addr'>配達条件: {html.escape('、'.join(delivery))}</p>")
+        menu = clean_bento_clause(str(fields.get("おすすめメニュー") or ""))
+        if menu and "記載なし" not in menu:
+            lines.append(f"<p class='spot-addr'>メニュー: {html.escape(menu)}</p>")
+        if len(lines) > 1:
+            cards.append("<article class='spot bento-card'>" + "".join(lines) + "</article>")
+    if not cards:
+        return ""
+    return "<div class='spot-list'>" + "".join(cards) + "</div>"
+
+
 def bento_reply(user_text: str, messages: list[dict] | None = None) -> str:
-    return ask_gemini(user_text, messages or [], None, None, bento_facts(user_text))
+    cards = bento_cards_html(user_text)
+    if cards:
+        return f"<div class='bubble'>店ごとに整理したロケ弁です。</div>{cards}"
+    spoken = ask_gemini(
+        user_text,
+        messages or [],
+        None,
+        None,
+        bento_facts(user_text),
+        "お弁当は1店舗につき1ブロック。店名、エリア、価格帯、配達条件を改行し、複数店を1行に繋げない。電話番号は書かない。",
+    )
+    return spoken
 
 
 def place_brief(rows: list[dict]) -> str:
@@ -1390,8 +1446,8 @@ def ask_gemini(
             "実データが渡されている。このデータに無い施設名、店名、数字は作らない。"
             "紹介は2文まで。そのあと候補を箇条書きにする。"
             "1件につき必ず1行。行頭は「- 」。"
-            "形式は「- 施設名または店名 / 所在地 / 利用条件または設備または価格」。撮影日と作品名は書かない。利用条件があれば【利用条件】と書く。所在地が無ければその欄は書かない。"
-            "1行の中に次の候補を続けない。"
+            "ロケ地なら10件以上、1件1行。「- 施設名 / 市区町村 / 受入条件」。お弁当なら1店舗につき1ブロックで、店名、エリア、価格帯、配達条件を改行する。"
+            "撮影日と作品名は書かない。1行の中に次の候補を続けない。"
         )
     elif not task:
         task = "実データの一覧は渡していない。施設名や店名を作って候補として出さない。相談、挨拶、文章作成には直接答える。"
@@ -1425,7 +1481,7 @@ def ask_gemini(
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.4 if facts or guided else 0.6,
-                    max_output_tokens=360 if guided else (1200 if facts else 800),
+                    max_output_tokens=1600 if "10件" in (task or "") else (900 if guided else (1600 if facts else 800)),
                 ),
             )
             reply_text = guard_speech(response.text or "")
@@ -1512,15 +1568,16 @@ def spot_cards_html(rows: list[dict]) -> str:
         if conditions and feature.startswith(conditions):
             feature = feature[len(conditions):].strip(" 。、/")
         addr_html = f"<p class='spot-addr'>エリア: {html.escape(address)}</p>" if address else ""
-        feature_html = f"<p class='spot-feature'>特徴: {html.escape(feature)}</p>" if feature else ""
-        badge_html = (
-            f"<p class='spot-badges'><span class='spot-badge'>【利用条件】{html.escape(conditions)}</span></p>"
-            if conditions else ""
-        )
+        notes = []
+        if conditions:
+            notes.append(conditions)
+        if feature and feature not in conditions:
+            notes.append(feature)
+        note_html = f"<p class='spot-feature'>受入条件: {html.escape('、'.join(notes))}</p>" if notes else ""
         cards.append(
             "<article class='spot'>"
             f"<h3>{html.escape(name)}</h3>"
-            f"{addr_html}{feature_html}{badge_html}"
+            f"{addr_html}{note_html}"
             "</article>"
         )
     if not cards:
@@ -1591,10 +1648,24 @@ def parse_location_lines(text: str) -> list[dict]:
         if not acceptable_public_row(row):
             continue
         rows.append(row)
-    return unique_places(rows)[:5]
+    return unique_places(rows)[:16]
 
 
-def gather_location_rows(query: str, limit: int = 5, exclude_keys: set[str] | None = None) -> list[dict]:
+def prefer_tokyo(rows: list[dict]) -> list[dict]:
+    def rank(row: dict) -> int:
+        address = str(row.get("address") or "")
+        if "東京" in address:
+            return 0
+        if any(name in address for name in ("神奈川", "千葉", "埼玉")):
+            return 1
+        if any(name in address for name in ("茨城", "栃木", "群馬")):
+            return 2
+        return 3
+
+    return sorted(rows, key=rank)
+
+
+def gather_location_rows(query: str, limit: int = 40, exclude_keys: set[str] | None = None) -> list[dict]:
     pool: list[dict] = []
     try:
         pool.extend(search_sheet_keywords(query, limit=limit))
@@ -1604,22 +1675,23 @@ def gather_location_rows(query: str, limit: int = 5, exclude_keys: set[str] | No
         pool.extend(search_local_locations(query, limit=limit, exclude_keys=exclude_keys) or [])
     except Exception:
         pass
-    return unique_places(pool)[:limit]
+    return prefer_tokyo(unique_places(pool))[:limit]
 
 
 def suggest_location_rows(user_text: str, existing: list[dict], messages: list[dict] | None) -> list[dict]:
-    known = "、".join(str(row.get("location_name") or "") for row in existing if row.get("location_name"))
+    if len(existing) >= 10:
+        return []
+    known = "、".join(str(row.get("location_name") or "") for row in existing[:20] if row.get("location_name"))
     task = (
-        "台帳は3件未満なので、関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）で実在する"
-        "フィルムコミッション案内の公共施設・撮影受け入れ施設を足し、合計3件から5件にする。"
-        "候補が無い、該当する実データが無い、という文は書かない。"
+        "東京を中心に、関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）の実在施設を10件以上出す。"
+        "1〜3件で終わらせない。候補が無いという文は書かない。"
         "撮影日、作品名、URL、電話番号は書かない。個人の自宅は出さない。"
         "学校の質問は学校・廃校・校舎、オフィスや会社はビル・会議室・事務所、病院は医院・クリニック、家はハウススタジオ・古民家・撮影用の民家。"
         "1件につき1行。行頭は「- 」。"
-        "形式は「- 施設名 / 市区町村 / 特徴。【利用条件】土日祝・平日・夜間などの受入」。"
+        "形式は「- 施設名 / 市区町村 / 受入条件・特記（土日、夜間、搬入）」。"
         f"既出の名前は繰り返さない: {known or 'なし'}"
     )
-    spoken = ask_gemini(user_text, messages or [], None, None, place_brief(existing), task)
+    spoken = ask_gemini(user_text, messages or [], None, None, "", task)
     return parse_location_lines(spoken)
 
 
@@ -1628,12 +1700,12 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
         more = is_more_request(user_text)
         query = followup_query(user_text) if more else user_text
         exclude = shown_location_keys(more)
-        rows = gather_location_rows(query, limit=5, exclude_keys=exclude) if str(query or "").strip() else []
-        if len(rows) < 3:
-            rows = unique_places(rows + suggest_location_rows(user_text, rows, messages))
-        if len(rows) < 3:
-            rows = unique_places(rows + suggest_location_rows(user_text, rows, messages))
-        shown = rows[:5]
+        rows = gather_location_rows(query, limit=40, exclude_keys=exclude) if str(query or "").strip() else []
+        if len(rows) < 10:
+            rows = prefer_tokyo(unique_places(rows + suggest_location_rows(user_text, rows, messages)))
+        if len(rows) < 10:
+            rows = prefer_tokyo(unique_places(rows + suggest_location_rows(user_text, rows, messages)))
+        shown = rows[:40]
         if shown:
             remember_locations(shown, query, more)
         listing = spot_cards_html(shown)
@@ -1644,7 +1716,7 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
                 messages or [],
                 None,
                 None,
-                place_brief(shown),
+                "",
                 "前置きは1文だけ。施設名は列挙しない。候補が無いとは書かない。撮影日と作品名は書かない。",
             )
             intro = drop_empty_claims(intro)
@@ -1740,10 +1812,13 @@ def sheet_keywords(query: str) -> list[str]:
         if term in skip or len(term) < 2 or term in found:
             continue
         found.append(term)
-    return found[:6]
+    for word in category_terms(query):
+        if word not in found:
+            found.append(word)
+    return found
 
 
-def search_sheet_keywords(query: str, limit: int = 8) -> list[dict]:
+def search_sheet_keywords(query: str, limit: int = 40) -> list[dict]:
     expanded = category_terms(query)
     terms = sheet_keywords(query)
     if not terms and not expanded:
@@ -2117,7 +2192,7 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         reply = bento_reply(user_text, messages)
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
-        return reply, False
+        return reply, reply.startswith("<")
     if is_desk_query(user_text):
         reply, as_html = desk_reply(user_text, messages)
         row_id = log_search_query(user_text)
@@ -2943,7 +3018,8 @@ def render_chat(avatar_b64: str):
                     if is_founder_query(last_user):
                         reply, as_html = founder_card_html(), True
                     elif is_bento_query(last_user):
-                        reply, as_html = bento_reply(last_user), False
+                        reply = bento_reply(last_user)
+                        as_html = reply.startswith("<")
                     elif is_desk_query(last_user):
                         reply, as_html = desk_reply(last_user, st.session_state.messages)
                     elif is_location_query(last_user):
