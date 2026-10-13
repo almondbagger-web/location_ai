@@ -120,7 +120,7 @@ SYSTEM_INSTRUCTION = """
 あなたは映像制作会社 株式会社ALMONDBAGGERのAI制作アシスタント『YUMI-CHA』です。映画・ドラマ・CM・MVの制作部現場を20年以上支えてきたベテランの知見と、Google Gemini本来の洗練された知性・論理的思考を持っています。
 
 ・トーン：知的で親しみやすく、結論ファースト。余計な自分語りや長い前置きはせず、現場の急ぎの状況を察してスパッと要点を伝える。
-・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。文面は ``` で囲む。
+・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。コードフェンスは使わない。
 ・ロケ地相談時：撮影日、未解禁を含む作品名、俳優名、撮影実績には触れない。個人の自宅は出さない。案内はロケ地（施設・店舗・公園の正式名称）、住所（都道府県と市区町村）、シーン（取調室、屋上対峙、オフィス会議のような状況名）、条件だけ。シーンが特定できなければ「汎用撮影」。特徴の長文は書かない。新宿区・港区のような行政区名だけを施設名にしない。
 ・「該当する実データはございません」「施設データはございません」「記録がありません」など、候補が無いと終わる返答は禁止。
 ・ロケ地の一覧はアプリが箇条書きにする。JSON、配列、{"name": ...} は絶対に書かない。
@@ -436,8 +436,6 @@ def classify_craft(text: str) -> str:
         kind = "callsheet"
     elif re.search(r"心得|制作進行の仕事|制作部の仕事", raw):
         kind = "mindset"
-    elif re.search(r"テンプレート|テンプレ|フォーマット|雛形|文面|文案", raw):
-        kind = "greeting"
     else:
         kind = ""
     if not kind:
@@ -481,13 +479,36 @@ def inherited_craft(messages: list[dict] | None) -> str:
     return ""
 
 
+TEMPLATE_ONLY_RE = re.compile(
+    r"^(?:テンプレート|テンプレ|フォーマット|雛形|文面|文案)(?:を)?(?:出して|ください|下さい|見せて|書いて|お願い)?$"
+)
+CRAFT_TOPICS = {"greeting", "money", "permit", "prep", "timeline", "vehicle", "liaison", "camp", "callsheet", "mindset"}
+
+
+def saved_topic() -> str:
+    try:
+        return str(st.session_state.get("last_topic") or "")
+    except Exception:
+        return ""
+
+
 def craft_kind(user_text: str, messages: list[dict] | None = None) -> str:
     direct = classify_craft(user_text)
-    if direct:
+    compact = re.sub(r"\s+", "", user_text or "")
+    vague = bool(TEMPLATE_ONLY_RE.match(compact))
+    if direct and not vague:
         return direct
-    if not is_craft_followup(user_text):
-        return ""
-    return inherited_craft(messages)
+    if not is_craft_followup(user_text) and not vague:
+        return direct
+    inherited = inherited_craft(messages)
+    if inherited not in CRAFT_TOPICS:
+        saved = saved_topic()
+        inherited = saved if saved in CRAFT_TOPICS else ""
+    if inherited:
+        return inherited
+    if vague:
+        return "greeting"
+    return direct
 
 
 MONEY_NOTE = """お金は、預かった瞬間から責任です。
@@ -499,7 +520,7 @@ MONEY_NOTE = """お金は、預かった瞬間から責任です。
 ・制作担当は全体、制作主任は物件、制作進行は移動・食・消耗品。自分が預かる費目は自分で組む。
 ・仮払いは用途・金額・返却期限を残し、返却時は現金とレシートを一緒に回収する。
 ・レシートの裏には、日付、氏名、部署、用途、宛名を書く。根拠のない出金は精算できない。
-・バレ飯は地方の撮休と移動日。アルコールと嗜好品は外し、上限を先に決める。"""
+・バレ飯は地方の撮休と移動日。アルコールとタバコは外し、上限を先に決める。レシートの裏書きは同じ。"""
 PERMIT_NOTE = """許可は、ロケの第一歩です。無断の道路使用はできません。
 
 ・道路使用は、所轄警察署の交通課。申請書、図面、使用計画書、車止めと人止めの計画を揃える。原則は撮影の7日前、実務は2週間前。
@@ -517,7 +538,7 @@ PREP_NOTE = """仕込みは、地域との信頼づくりです。
 ・両天はりょうてん。晴れと雨の現場を同時に仕込み、バラシのリミットを朝から見て、使わない方のコストを増やさない。"""
 TIMELINE_NOTE = """制作進行の1日は、複数の線路を同時に見る仕事です。
 
-・朝は集合の30分前に入り、点呼、お茶・麦茶・お湯・朝コーヒー、トランシーバーと電動工具の充電、夏は氷、冬は灯油。
+・朝は集合の30分前に入り、点呼、弁当の配布、お茶・麦茶・お湯・朝コーヒー、シーバーとトランシーバーと電動工具の充電、夏は氷、冬は灯油。
 ・撮影中は、シーンの工数、俳優の入りと出しの配車、買い出し、搬入路の養生、人止めと車止めを見る。休憩は90分交代で休ませる。
 ・現場移動の先発は、駐車、支度、養生、挨拶。殿（しんがり）は、忘れ物、原状復帰、最後の確認。
 ・明日の指差しは、配車、弁当の納品と配膳、俳優の入り時間、日々スケにない変更の追記。
@@ -543,6 +564,13 @@ CAMP_NOTE = """備品車、食事、撤収は、進行の命綱です。
 ・地方で切れやすいもの。ウェス、遮蔽の黒ビニール、養生毛布、固形燃料、炭酸消火器。
 ・食事は献立を回し、アレルギー、宗教、ベジを先に聞く。差し入れは出したらすぐコールし、最前線に取り置きを残す。子役の食事は袋を分け、衛生を優先する。
 ・撤収は現状復帰、分別、産廃は許可業者、ポットを洗い、電池を充電し、忘れ物をゼロにしてから鍵を返す。"""
+
+SYSTEM_INSTRUCTION += (
+    "\n\n【制作部の不変ナレッジ。この内容は削らず、質問に直接使う】\n"
+    "挨拶文は「ドラマ・映像撮影ロケーションのお願い」。日時は準備日・撮影日・予備日、場所、撮影内容、制作プロダクション、現場責任者・連絡先。空欄は空欄のまま。\n"
+    + MONEY_NOTE + "\n" + PERMIT_NOTE + "\n" + PREP_NOTE + "\n" + TIMELINE_NOTE + "\n"
+    + VEHICLE_NOTE + "\n" + LIAISON_NOTE + "\n" + CAMP_NOTE + "\n" + GREETING_LETTER
+)
 
 
 def craft_body(kind: str) -> tuple[str, str]:
@@ -570,6 +598,7 @@ def craft_body(kind: str) -> tuple[str, str]:
 def craft_reply(kind: str, user_text: str = "", messages: list[dict] | None = None) -> tuple[str, bool]:
     try:
         st.session_state.last_craft = kind
+        st.session_state.last_topic = kind
         st.session_state.last_match_count = None
     except Exception:
         pass
@@ -1725,7 +1754,13 @@ RAMBLE_RE = re.compile(r"お疲れ様|胃がキリキリ|（笑）|\(笑\)|了�
 def guard_speech(text: str) -> str:
     from location_hygiene import person_names
 
-    cleaned = re.sub(r"```(?:json)?\s*.*?```", "", str(text or ""), flags=re.S | re.I)
+    def _unwrap_fence(match: re.Match) -> str:
+        body = match.group(1) or ""
+        if body.lstrip()[:1] in "{[":
+            return ""
+        return body
+
+    cleaned = re.sub(r"```(?:[a-zA-Z]+)?\s*([\s\S]*?)```", _unwrap_fence, str(text or ""))
     cleaned = re.sub(r"\[\s*\{[\s\S]*?\}\s*\]", "", cleaned)
     cleaned = re.sub(r"\{[^{}]{0,500}\"(?:name|address|condition)\"[^{}]{0,500}\}", "", cleaned)
     cleaned = strip_scene_numbers(clean_visible_text(cleaned))
@@ -1805,18 +1840,33 @@ def bento_cards_html(user_text: str) -> str:
 
 
 def bento_reply(user_text: str, messages: list[dict] | None = None) -> str:
+    try:
+        st.session_state.last_topic = "bento"
+    except Exception:
+        pass
     cards = bento_cards_html(user_text)
     if cards:
+        try:
+            st.session_state.last_match_count = None
+        except Exception:
+            pass
         return f"<div class='bubble'>店ごとに整理したロケ弁です。</div>{cards}"
-    spoken = ask_gemini(
-        user_text,
-        messages or [],
-        None,
-        None,
-        bento_facts(user_text),
-        "お弁当は1店舗につき1ブロック。店名、エリア、価格帯、配達条件を改行し、複数店を1行に繋げない。電話番号は書かない。",
-    )
-    return spoken
+    facts = bento_facts(user_text)
+    has_facts = bool(facts) and "該当する" not in facts and facts.strip() != "（なし）"
+    if has_facts:
+        spoken = ask_gemini_timed(
+            user_text,
+            messages,
+            "お弁当は1店舗につき1ブロック。店名、エリア、価格帯、配達条件を改行し、複数店を1行に繋げない。電話番号は書かない。最低注文数は実データに無い数字を作らない。記録が無い、とは書かない。",
+            8,
+        )
+        if spoken:
+            return f"<div class='bubble'>{rich_text(spoken)}</div>"
+    try:
+        st.session_state.last_match_count = 0
+    except Exception:
+        pass
+    return f"<div class='bubble'>{html.escape(EXPERIENCE_LEAD)}</div>{lines_html(experience_lines(user_text))}"
 
 
 def place_brief(rows: list[dict]) -> str:
@@ -2666,29 +2716,123 @@ def model_place_rows(text: str) -> list[dict]:
     return parse_location_lines(raw)
 
 
-def gemini_location_rows(user_text: str, messages: list[dict] | None) -> list[dict]:
-    import threading
+EXPERIENCE_LEAD = "台帳には登録がありませんが、制作部の経験則・近隣エリアの候補としては以下の選択肢が考えられます"
 
-    task = (
-        "スプレッドシートが空だったときの補完。"
-        "東京を優先し、関東（東京・神奈川・埼玉・千葉・茨城・栃木・群馬）の実在施設を10件以上、できるだけ多く書く。"
-        "1件につき1行。形式は「・施設名：都道府県市区町村【シーン】」。"
-        "JSON、作品名、撮影日、俳優名、URL、電話番号は書かない。個人の自宅は出さない。"
-        "学校なら学校・廃校・校舎、病院なら医院・病棟、オフィスならビル・会議室。"
-    )
-    box = {"rows": []}
+
+def ask_gemini_timed(user_text: str, messages: list[dict] | None, task: str, seconds: float = 8) -> str:
+    try:
+        client = st.session_state.get("gemini_client")
+    except Exception:
+        client = None
+    if client is None:
+        return ""
+    models = model_chain()
+    prior = history_block(messages or [])
+    prompt = f"{task}\n\n【これまでの会話】\n{prior or '（なし）'}\n\n【質問】\n{user_text}\n"
+    box: dict[str, str] = {}
 
     def run() -> None:
-        try:
-            spoken = ask_gemini(user_text, messages or [], None, None, "", task)
-            box["rows"] = model_place_rows(spoken)
-        except Exception:
-            box["rows"] = []
+        for model in models:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        temperature=0.4,
+                        max_output_tokens=1200,
+                    ),
+                )
+                reply_text = guard_speech(getattr(response, "text", "") or "")
+                if reply_text and not looks_like_failure(reply_text) and not EMPTY_HIT_RE.search(reply_text):
+                    box["text"] = reply_text
+                    return
+            except Exception:
+                continue
 
-    worker = threading.Thread(target=run, daemon=True)
-    worker.start()
-    worker.join(20)
-    return list(box["rows"] or [])
+    try:
+        import threading
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(seconds)
+    except Exception:
+        return ""
+    return box.get("text") or ""
+
+
+def experience_lines(user_text: str) -> list[str]:
+    raw = user_text or ""
+    if is_bento_query(raw):
+        return [
+            "都内は、仕出しの和食と中華をエリアごとに2社仮押さえする",
+            "朝弁は前日の夕方締めが多い。夜弁は温かいものと汁物を分ける",
+            "アレルギー、宗教、ベジは発注票に分け、現場で袋を分ける",
+            "最低個数は店に確認する。台帳に無い数字は決め打ちしない",
+        ]
+    if re.search(r"学校|小学校|中学校|高校|大学", raw):
+        return [
+            "東京は、大学の空き教室と廃校活用施設を先に当たる",
+            "公立学校は、区市町村の教育委員会か学校事務室へ撮影条件を確認する",
+            "神奈川・千葉・埼玉は、フィルムコミッション経由で同条件を並行照会する",
+            "教室の実写が間に合わなければ、学校セットのスタジオを同日に仮押さえする",
+        ]
+    if re.search(r"病院|医院|クリニック", raw):
+        return [
+            "大学病院とクリニックは、広報か医事課へ撮影の可否を先に確認する",
+            "病棟の実写が難しければ、病院セットのスタジオを並行で押さえる",
+            "夜間と救急動線が重なる日は、別日にずらす",
+        ]
+    if re.search(r"オフィス|会社|ビル|会議室", raw):
+        return [
+            "新宿、渋谷、港の貸し会議室と空きオフィスを、夜間と大型車の条件で絞る",
+            "内観だけなら、オフィスセットのハウススタジオを同日に仮押さえする",
+            "足りなければ横浜、千葉、さいたまの同規模ビルへ広げる",
+        ]
+    if "公園" in raw:
+        return [
+            "国営、都立、市立で窓口が違う。区名が分かればその公園課へ確認する",
+            "占用と夜間は、申請の期限が施設ごとに違う",
+            "公園が難しければ、似た園路のあるオープンセットを並行で見る",
+        ]
+    return [
+        "東京23区を先に、条件が厳しければ神奈川、千葉、埼玉へ広げる",
+        "同じ絵面の公民館、貸しホール、ハウススタジオを同日に仮押さえする",
+        "駐車、搬入、夜間の3点をフィルムコミッションに渡して逆引きする",
+        "私有の自宅は候補にしない",
+    ]
+
+
+def lines_html(lines: list[str]) -> str:
+    items = [f"<li>・{html.escape(line)}</li>" for line in lines if str(line or "").strip()]
+    if not items:
+        return ""
+    return "<ul class='line-list'>" + "".join(items) + "</ul>"
+
+
+def loose_advice_lines(text: str) -> list[str]:
+    lines = []
+    for line in str(text or "").splitlines():
+        cleaned = re.sub(r"^[\s・\-\*・]+", "", line).strip()
+        if len(cleaned) < 6 or EMPTY_HIT_RE.search(cleaned) or EXPERIENCE_LEAD in cleaned:
+            continue
+        lines.append(cleaned)
+    return lines[:12]
+
+
+def experience_location_html(user_text: str, messages: list[dict] | None) -> str:
+    task = (
+        f"最初の1文は「{EXPERIENCE_LEAD}」。"
+        "そのあと東京を優先し、関東の実在する施設を6件以上、1行に1件で書く。"
+        "形式は「・施設名：都道府県市区町村【シーン】」。"
+        "記録が無い、該当しない、で終わらせない。個人の自宅、作品名、撮影日、電話番号、URLは書かない。"
+        "学校なら学校・廃校・校舎、病院なら医院・病棟、オフィスならビル・会議室。"
+    )
+    spoken = ask_gemini_timed(user_text, messages, task, 8)
+    rows = model_place_rows(spoken) if spoken else []
+    listing = spot_cards_html(rows)
+    advice = [] if listing else loose_advice_lines(spoken)
+    body = listing or lines_html(advice or experience_lines(user_text))
+    return f"<div class='bubble'>{html.escape(EXPERIENCE_LEAD)}</div>{body}"
 
 
 RETRY_LIST_HTML = "<ul class='line-list'><li>・候補を読み直しています。施設名を添えて、もう一度送ってください。</li></ul>"
@@ -2707,6 +2851,7 @@ def with_map_promo(body: str) -> str:
 
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
     try:
+        st.session_state.last_topic = "location"
         st.session_state.last_match_count = None
     except Exception:
         pass
@@ -2721,28 +2866,26 @@ def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
         exclude = shown_location_keys(more)
         rows = gather_location_rows(query, limit=0, exclude_keys=exclude) if str(query or "").strip() else []
         listing = spot_cards_html(rows)
-        if not listing:
-            rows = gemini_location_rows(user_text, messages)
-            listing = spot_cards_html(rows)
-        try:
-            st.session_state.last_match_count = len(rows) if listing and "読み直して" not in listing else 0
-        except Exception:
-            pass
-        if rows and listing and "読み直して" not in listing:
-            remember_locations(rows, query, more)
-        if not listing:
+        if rows and listing:
             try:
-                st.session_state.last_match_count = 0
+                st.session_state.last_match_count = len(rows)
             except Exception:
                 pass
-            return RETRY_LIST_HTML, True
-        return with_map_promo(listing), True
+            remember_locations(rows, query, more)
+            return with_map_promo(listing), True
+        try:
+            st.session_state.last_match_count = 0
+        except Exception:
+            pass
+        return with_map_promo(experience_location_html(user_text, messages)), True
     except Exception:
         try:
             st.session_state.last_match_count = 0
         except Exception:
             pass
-        return RETRY_LIST_HTML, True
+        return with_map_promo(
+            f"<div class='bubble'>{html.escape(EXPERIENCE_LEAD)}</div>{lines_html(experience_lines(user_text))}"
+        ), True
 
 
 SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
@@ -3230,26 +3373,60 @@ def merge_map_records(payload) -> list[dict]:
     return merged
 
 
-def ledger_fallback(user_text: str) -> tuple[str, bool]:
+def previous_user_text(messages: list[dict] | None) -> str:
+    prior = list(messages or [])
+    if prior and prior[-1].get("role") == "user":
+        prior = prior[:-1]
+    for message in reversed(prior):
+        if message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
+def safe_close(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
     if is_founder_query(user_text):
         return founder_card_html(), True
-    if is_location_query(user_text):
-        return location_reply(user_text)
-    rows: list[dict] = []
-    try:
-        rows = search_sheet_keywords(user_text, limit=8)
-    except Exception:
-        rows = []
-    if not rows:
+    topic = craft_kind(user_text, messages)
+    if topic not in CRAFT_TOPICS:
+        saved = saved_topic()
+        topic = saved if saved in CRAFT_TOPICS else ""
+    if topic in CRAFT_TOPICS:
+        return craft_reply(topic, previous_user_text(messages) or user_text, messages)
+    if is_bento_query(user_text) or saved_topic() == "bento":
+        return bento_reply(previous_user_text(messages) or user_text, messages), True
+    if is_location_query(user_text) or is_scene_search(user_text) or saved_topic() == "location":
+        return location_reply(previous_user_text(messages) or user_text, messages)
+    return craft_reply("mindset", user_text, messages)
+
+
+def follow_context_reply(user_text: str, messages: list[dict] | None) -> tuple[str, bool] | None:
+    compact = re.sub(r"\s+", "", user_text or "")
+    if not compact or len(compact) > 32 or not CRAFT_FOLLOW_RE.search(compact):
+        return None
+    if classify_craft(user_text) and not TEMPLATE_ONLY_RE.match(compact):
+        return None
+    if is_bento_query(user_text) or is_location_query(user_text) or is_scene_search(user_text):
+        return None
+    topic = inherited_craft(messages)
+    if topic not in CRAFT_TOPICS and topic not in {"location", "bento"}:
+        topic = saved_topic()
+    prev = previous_user_text(messages)
+    if topic in CRAFT_TOPICS:
+        return craft_reply(topic, prev or user_text, messages)
+    if topic == "bento":
+        return bento_reply(prev or user_text, messages), True
+    if topic == "location":
+        query = prev
         try:
-            rows = search_local_locations(user_text, limit=8)
+            query = str(st.session_state.get("last_location_query") or "") or prev
         except Exception:
-            rows = []
-    listing = spot_cards_html(rows)
-    if listing:
-        lead = "台帳から、言葉が一致したロケ地・お弁当の記録です。"
-        return f"<div class='bubble'>{lead}</div>{listing}", True
-    return "<div class='bubble'>台帳には、この言葉に一致する記録がまだありません。</div>", True
+            query = prev
+        if re.search(r"詳しく|詳細", compact):
+            reply, as_html = detail_reply(query or user_text, messages)
+            if reply:
+                return reply, as_html
+        return location_reply(query or user_text, messages)
+    return None
 
 
 def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | None, mime: str | None) -> tuple[str, bool]:
@@ -3274,11 +3451,9 @@ def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
     if kind:
         return craft_reply(kind, user_text, messages)
     try:
-        return ledger_fallback(user_text)
+        return safe_close(user_text, messages)
     except Exception:
-        if is_location_query(user_text) or is_scene_search(user_text):
-            return RETRY_LIST_HTML, True
-        return "<div class='bubble'>台帳には、この言葉に一致する記録がまだありません。</div>", True
+        return craft_reply("mindset", user_text, messages)
 
 
 def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | None, mime: str | None) -> tuple[str, bool]:
@@ -3304,6 +3479,16 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, reply.startswith("<")
+    followed = None
+    try:
+        followed = follow_context_reply(user_text, messages)
+    except Exception:
+        followed = None
+    if followed:
+        reply, as_html = followed
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
     craft = ""
     try:
         craft = craft_kind(user_text, messages)
@@ -3341,6 +3526,12 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
     except Exception:
         permit_text = ""
     reply = conversation_reply(user_text, messages, image_bytes, mime, extra=permit_text)
+    visible = re.sub(r"<[^>]+>", "", reply or "")
+    if not visible.strip() or EMPTY_HIT_RE.search(visible):
+        reply, as_html = safe_close(user_text, messages)
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
     row_id = log_search_query(user_text)
     save_log_reply(row_id, reply)
     return reply, False
@@ -4319,8 +4510,11 @@ def render_chat(avatar_b64: str):
                 record_chat_query(last_user, reply)
             except Exception:
                 pass
-        if not reply and (is_location_query(last_user) or is_scene_search(last_user)):
-            reply, as_html = RETRY_LIST_HTML, True
+        if not reply or EMPTY_HIT_RE.search(re.sub(r"<[^>]+>", "", reply or "")):
+            try:
+                reply, as_html = safe_close(last_user, st.session_state.messages)
+            except Exception:
+                reply, as_html = craft_reply("mindset", last_user, st.session_state.messages)
         if reply:
             st.session_state.messages.append({"role": "assistant", "content": reply, "html": as_html})
         st.rerun()
