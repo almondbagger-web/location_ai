@@ -496,6 +496,42 @@ def append_batches(worksheet, rows: list[list[str]]) -> int:
     return len(rows)
 
 
+QUERY_SHEET = "未解決クエリ"
+
+
+def open_queries(book) -> list[tuple[int, str]]:
+    try:
+        worksheet = book.worksheet(QUERY_SHEET)
+    except gspread.WorksheetNotFound:
+        return []
+    found = []
+    for index, row in enumerate(worksheet.get_all_values()[1:], start=2):
+        query = (row[0] if row else "").strip()
+        unresolved = (row[1] if len(row) > 1 else "").strip().lower()
+        status = (row[5] if len(row) > 5 else "open").strip() or "open"
+        if query and unresolved == "true" and status == "open":
+            found.append((index, query))
+    return found
+
+
+def settle_queries(book, rows: list[list[str]]) -> int:
+    names = [row[1] for row in rows if len(row) > 1 and len(row[1]) >= 3]
+    if not names:
+        return 0
+    try:
+        worksheet = book.worksheet(QUERY_SHEET)
+    except gspread.WorksheetNotFound:
+        return 0
+    pending = []
+    for index, query in open_queries(book):
+        if any(name in query for name in names):
+            pending.append({"range": f"B{index}", "values": [["false"]]})
+            pending.append({"range": f"F{index}", "values": [["resolved"]]})
+    if pending:
+        worksheet.batch_update(pending, value_input_option="RAW")
+    return len(pending) // 2
+
+
 def sheet_index(worksheet) -> tuple[set[str], set[str]]:
     names: set[str] = set()
     urls: set[str] = set()
@@ -525,13 +561,25 @@ def main():
         worksheet = open_sheet(client)
         known_names, known_urls = sheet_index(worksheet)
         print(f"既存 {len(known_names)} 件を照合")
+        try:
+            queued = open_queries(worksheet.spreadsheet)
+            print(f"未解決クエリ {len(queued)} 件を翌朝バッチの対象として読込")
+        except Exception as exc:
+            print(f"未解決クエリの読込をスキップ: {exc}")
     rows = collect(args.limit, args.pause, known_names, known_urls)
     print(f"\n収集 {len(rows)} 件")
     if args.dry_run:
         for row in rows:
             print("\t".join(row))
         return
-    added = append_batches(worksheet, fresh_rows(rows, known_names))
+    fresh = fresh_rows(rows, known_names)
+    added = append_batches(worksheet, fresh)
+    try:
+        settled = settle_queries(worksheet.spreadsheet, fresh)
+        if settled:
+            print(f"未解決クエリ {settled} 件を解消")
+    except Exception as exc:
+        print(f"未解決クエリの更新をスキップ: {exc}")
     print(f"追記 {added} 件（{SHEET_BATCH} 件ずつ、既存の名称はスキップ）")
 
 
