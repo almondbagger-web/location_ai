@@ -3642,42 +3642,60 @@ def flagship_cards(layout: str) -> str:
     return f'<div class="flags {html.escape(layout)}">' + "".join(cards) + "</div>"
 
 
+def sidebar_ad_markup() -> str:
+    client = html.escape(ADSENSE_CLIENT.strip(), quote=True)
+    slot_id = html.escape(ADSENSE_SLOT_SIDE.strip(), quote=True)
+    return f"""
+    <style>
+      html, body {{ margin: 0; width: 100%; height: 250px; overflow: hidden; background: transparent; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }}
+      .ad-hold {{
+        position: relative; box-sizing: border-box; width: 100%; height: 250px; border-radius: 14px; overflow: hidden;
+        border: 1px solid rgba(248, 113, 113, 0.35);
+        background:
+          radial-gradient(140px 80px at 0% 0%, rgba(196,22,28,.62), transparent 72%),
+          radial-gradient(160px 90px at 100% 100%, rgba(56,189,248,.28), transparent 70%),
+          linear-gradient(155deg, #0b1220 0%, #1e293b 55%, #3f1d2e 100%);
+      }}
+      .ad-placeholder {{
+        position: absolute; inset: 0; z-index: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+        letter-spacing: 0.16em;
+      }}
+      .ad-placeholder span {{ color: #fecaca; font-size: 11px; font-weight: 800; }}
+      .ad-placeholder strong {{
+        margin-top: 8px; color: #fff7ed; font-size: 18px; letter-spacing: 0.2em;
+        font-family: Montserrat, "Hiragino Sans", sans-serif;
+      }}
+      .ad-hold ins.adsbygoogle {{
+        position: relative; z-index: 1; display: block; width: 100%; height: 250px; background: transparent;
+      }}
+    </style>
+    <div class="ad-hold">
+      <div class="ad-placeholder" aria-hidden="true"><span>スポンサー募集中</span><strong>ALMONDBAGGER</strong></div>
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={client}" crossorigin="anonymous"></script>
+      <ins class="adsbygoogle"
+           style="display:block;width:100%;height:250px"
+           data-ad-client="{client}"
+           data-ad-slot="{slot_id}"
+           data-ad-format="auto"
+           data-full-width-responsive="true"></ins>
+      <script>
+        try {{
+          (adsbygoogle = window.adsbygoogle || []).push({{}});
+        }} catch (err) {{}}
+      </script>
+    </div>
+    """
+
+
 def sponsor_markup(slot: str, variant: str) -> str:
     client = html.escape(ADSENSE_CLIENT.strip(), quote=True)
-    slot_id = html.escape(slot.strip(), quote=True)
-    ad = ""
-    if adsense_is_live(slot):
-        ad = f"""
-        <div class="ad-hold">
-          <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={client}" crossorigin="anonymous"></script>
-          <ins class="adsbygoogle"
-               style="display:block;width:100%;"
-               data-ad-client="{client}"
-               data-ad-slot="{slot_id}"
-               data-ad-format="auto"
-               data-full-width-responsive="true"></ins>
-          <script>
-            try {{
-              (adsbygoogle = window.adsbygoogle || []).push({{}});
-            }} catch (err) {{}}
-            setTimeout(function () {{
-              var hold = document.querySelector(".ad-hold");
-              var unit = hold && hold.querySelector("ins.adsbygoogle");
-              var status = unit && unit.getAttribute("data-ad-status");
-              var filled = unit && (unit.querySelector("iframe") || status === "filled");
-              if (!filled && hold) hold.classList.add("is-empty");
-            }}, 1800);
-          </script>
-        </div>
-        """
     layout = "stack" if variant == "side" else "row"
     return f"""
     <style>
       html, body {{ margin: 0; background: transparent; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }}
       .pr-wrap {{ padding: 2px; }}
       .pr-kicker {{ display: inline-block; font-size: 9px; letter-spacing: 0.18em; font-weight: 800; color: #94a3b8; border: 1px solid rgba(148,163,184,.45); border-radius: 999px; padding: 2px 6px; }}
-      .ad-hold {{ min-height: 100px; margin: 8px 0 0; overflow: hidden; }}
-      .ad-hold.is-empty {{ display: none; min-height: 0; margin: 0; }}
       .flags {{ display: flex; gap: 8px; margin-top: 8px; }}
       .flags.stack {{ flex-direction: column; }}
       .flags.row {{ flex-direction: row; }}
@@ -3697,16 +3715,15 @@ def sponsor_markup(slot: str, variant: str) -> str:
     </style>
     <div class="pr-wrap" data-ad-client="{client}">
       <span class="pr-kicker">PR</span>
-      {ad}
       {flagship_cards(layout)}
     </div>
     """
 
 
 def render_sponsor(slot: str, variant: str):
+    if variant == "side" and adsense_is_live(slot):
+        components.html(sidebar_ad_markup(), height=250, scrolling=False)
     height = 292 if variant == "side" else 132
-    if adsense_is_live(slot):
-        height += 120
     components.html(sponsor_markup(slot, variant), height=height, scrolling=False)
 
 
