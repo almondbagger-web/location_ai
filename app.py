@@ -339,6 +339,139 @@ def is_location_query(text: str) -> bool:
     return bool(re.search(r"ない|ある|探し|教えて|候補|どこ|撮影|ロケ|ほしい|欲しい", raw))
 
 
+CRAFT_FOLLOW_RE = re.compile(
+    r"教えて|ください|下さい|出して|見せて|フォーマット|テンプレ|雛形|文面|全文|書いて|お願い"
+)
+GREETING_LETTER = """【ドラマ・映像撮影ロケーションのお願い（近隣挨拶文テンプレ）】
+
+拝啓
+時下ますますご清栄のこととお慶び申し上げます。
+この度、下記の通り弊社製作の映像作品の撮影をさせて頂く事になりましたので、ご挨拶申し上げます。
+近隣の皆様にご迷惑をおかけしないよう細心の注意を払い、安全に配慮して進行いたしますが、何卒ご理解とご協力の程お願い申し上げます。
+何かご不明な点やお気づきの点がございましたら、現場スタッフまたは下記担当者までご一報いただけますようお願い申し上げます。
+お騒がせ致しますが、重ねてご協力の程よろしくお願い申し上げます。
+敬具
+
+記
+■ 日時：
+  ・準備日：令和〇年〇月〇日（〇） 〇〇:〇〇 〜 〇〇:〇〇（予定）
+  ・撮影日：令和〇年〇月〇日（〇） 〇〇:〇〇 〜 〇〇:〇〇（予定）
+  ・予備日：令和〇年〇月〇日（〇） 〇〇:〇〇 〜 〇〇:〇〇（予定）
+
+■ 場所：
+  [撮影現場名・建物名]（住所：[現場住所]）
+
+■ 撮影内容：
+  ドラマ（映画/CM/MV）のシーン撮影（※車両停車、照明、小道具搬入等）
+
+■ 制作プロダクション：
+  株式会社[制作会社名]
+  住所：〒XXX-XXXX [会社住所]
+  電話番号：[会社電話番号]
+
+■ 現場責任者（制作担当）：
+  [担当者氏名]
+  携帯番号：[携帯電話番号]
+  メールアドレス：[連絡先メールアドレス]
+"""
+CALLSHEET_NOTE = """香盤は、撮影日の進行表です。次の順で1枚にまとめます。
+
+・見出し：作品名、撮影日、集合時間、集合場所、天候予備
+・時間の列：入り、食事、仕込み、リハーサル、本番、移動、終了
+・各行：時刻、シーン、内容、出演、場所、衣装・美術・車両、備考
+・食事と移動と車両を、シーンより先に固定する
+・変わった箇所は版を上げ、古い版と混ざらないようにする
+
+角括弧の固有名詞は、その日の香盤に書き写してください。"""
+ROAD_NOTE = """道路使用許可は、撮影場所を管轄する警察署の窓口です。公園や河川は、道路とは別の管理者になります。
+
+・全面通行止めに近い規制は、極めてハードルが高いです。短時間の駐停車、誘導、片側交互を先に相談します。
+・許可が下りる前に、近隣へ確定日程として知らせない。
+・近隣挨拶、許可証の携帯、誘導員をセットで考えます。
+・住宅地の深夜帯は避ける。緊急車両の通り道は塞がない。
+
+申請書の空欄は、現場名・日時・車両台数・駐停車位置が分かってから埋めます。"""
+MINDSET_NOTE = """制作部の心得は、現場を止めないことです。
+
+・朝の確認は、危険、近隣、許可、食事、車両の順。
+・不明なことは隠さず、その場で担当へ返す。
+・未公開の作品名、出演者、個人の連絡先は、必要な相手以外に出さない。
+・挨拶と香盤と許可が揃ってから、美術と車両を動かす。
+・困ったら一人で抱えず、株式会社ALMONDBAGGERの制作へ相談する。"""
+
+
+def classify_craft(text: str) -> str:
+    raw = text or ""
+    if re.search(r"香盤", raw):
+        return "callsheet"
+    if re.search(r"道路使用|占用", raw):
+        return "road"
+    if re.search(r"心得", raw):
+        return "mindset"
+    if re.search(r"近隣.{0,8}挨拶|挨拶文|挨拶状|お願い状|ご挨拶", raw):
+        return "greeting"
+    if re.search(r"テンプレート|テンプレ|フォーマット|雛形|文面|文案", raw):
+        return "greeting"
+    return ""
+
+
+def is_craft_followup(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    if not compact or len(compact) > 28:
+        return False
+    if is_bento_query(text) or is_founder_query(text) or is_location_query(text):
+        return False
+    return bool(CRAFT_FOLLOW_RE.search(compact))
+
+
+def inherited_craft(messages: list[dict] | None) -> str:
+    prior = list(messages or [])
+    if prior and prior[-1].get("role") == "user":
+        prior = prior[:-1]
+    for message in reversed(prior):
+        if message.get("role") != "user":
+            continue
+        kind = classify_craft(str(message.get("content") or ""))
+        if kind:
+            return kind
+        break
+    for message in reversed(prior):
+        if message.get("role") != "assistant":
+            continue
+        lead = re.sub(r"<[^>]+>", " ", str(message.get("content") or ""))[:80]
+        return classify_craft(lead)
+    return ""
+
+
+def craft_kind(user_text: str, messages: list[dict] | None = None) -> str:
+    direct = classify_craft(user_text)
+    if direct:
+        return direct
+    if not is_craft_followup(user_text):
+        return ""
+    return inherited_craft(messages)
+
+
+def craft_reply(kind: str, messages: list[dict] | None = None) -> tuple[str, bool]:
+    try:
+        st.session_state.last_craft = kind
+        st.session_state.last_match_count = None
+    except Exception:
+        pass
+    if kind == "callsheet":
+        lead, body = "香盤の作り方です。", CALLSHEET_NOTE
+    elif kind == "road":
+        lead, body = "道路使用許可で先に見る注意点です。", ROAD_NOTE
+    elif kind == "mindset":
+        lead, body = "制作部の心得です。", MINDSET_NOTE
+    else:
+        lead, body = "近隣挨拶文の実務フォーマットです。〇と角括弧は、その現場の予定に置き換えて使ってください。", GREETING_LETTER
+    return (
+        f"<div class='bubble'><p>{html.escape(lead)}</p><pre class='craft-doc'>{html.escape(body)}</pre></div>",
+        True,
+    )
+
+
 def is_conversation_request(text: str) -> bool:
     raw = text or ""
     if is_bento_query(raw) or is_founder_query(raw) or is_location_query(raw):
@@ -2979,6 +3112,13 @@ def produce_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
             reply, as_html = "", False
     if reply:
         return reply, as_html
+    kind = ""
+    try:
+        kind = craft_kind(user_text, messages)
+    except Exception:
+        kind = ""
+    if kind:
+        return craft_reply(kind, messages)
     try:
         return ledger_fallback(user_text)
     except Exception:
@@ -3010,6 +3150,16 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, reply.startswith("<")
+    craft = ""
+    try:
+        craft = craft_kind(user_text, messages)
+    except Exception:
+        craft = ""
+    if craft:
+        reply, as_html = craft_reply(craft, messages)
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
     if is_detail_question(user_text):
         reply, as_html = detail_reply(user_text, messages)
         row_id = log_search_query(user_text)
@@ -3259,6 +3409,12 @@ def apply_theme():
         border: 1px solid rgba(251, 146, 60, 0.45); font-size: 13px; line-height: 1.6; font-weight: 700;
     }
     a.map-promo:hover { border-color: #c4161c; color: #c4161c !important; }
+    pre.craft-doc {
+        white-space: pre-wrap; word-break: break-word; margin: 10px 0 0;
+        background: #f8fafc; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 12px;
+        padding: 14px 16px; font-size: 13px; line-height: 1.75;
+        font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    }
     .share-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 14px 0 4px; }
     a.share-btn {
         display: inline-flex; align-items: center; justify-content: center;
