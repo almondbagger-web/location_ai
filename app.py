@@ -1558,28 +1558,140 @@ def conversation_reply(
     return ask_gemini(user_text, messages, image_bytes, mime, extra)
 
 
+PLACE_TAIL_RE = re.compile(
+    r"ヒルズ|モール|ビル|タワー|ホール|センター|スタジオ|公園|病院|大学|高校|学校|会館|スタジアム|UDX|プラザ|スクエア|ハウス|旅館|ホテル|神社|寺院|ドーム|体育館"
+)
+PLACE_CHUNK_RE = re.compile(
+    r"[一-龥A-Za-z0-9・]{1,12}(?:" + PLACE_TAIL_RE.pattern + r")"
+)
+
+
+def split_glued_places(text: str) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    found = []
+    cursor = 0
+    while cursor < len(raw):
+        match = PLACE_TAIL_RE.search(raw, cursor)
+        if not match:
+            break
+        chunk = raw[cursor:match.end()].strip(" 　、/・")
+        if chunk:
+            found.append(chunk)
+        cursor = match.end()
+    if len(found) >= 2:
+        return found
+    return [raw]
+
+
+def is_area_token(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    if not compact or len(compact) > 22:
+        return False
+    return bool(re.search(r"(都|道|府|県|区|市|町|村)", compact)) and not PLACE_CHUNK_RE.search(compact)
+
+
+def is_note_token(text: str) -> bool:
+    compact = str(text or "")
+    if PLACE_CHUNK_RE.search(compact) and not CONDITION_RE.search(compact) and not SPEC_RE.search(compact):
+        return False
+    return bool(CONDITION_RE.search(compact) or SPEC_RE.search(compact) or re.search(r"特徴|受入|搬入|撮影可|相談", compact))
+
+
+def facility_triples(parts: list[str]) -> list[tuple[str, str, str]]:
+    rows: list[tuple[str, str, str]] = []
+    name = area = note = ""
+
+    def flush() -> None:
+        nonlocal name, area, note
+        if name:
+            rows.append((name, area, note))
+        name = area = note = ""
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        glued = split_glued_places(part)
+        if len(glued) >= 2 and not is_note_token(part):
+            if name:
+                flush()
+            for chunk in glued:
+                if name:
+                    flush()
+                name = chunk
+            continue
+        if not name:
+            name = part
+            continue
+        if not area and is_area_token(part):
+            area = part
+            continue
+        if is_note_token(part):
+            note = f"{note} / {part}".strip(" /") if note else part
+            continue
+        flush()
+        name = part
+    flush()
+    return rows
+
+
+def own_clauses(text: str, own_name: str) -> list[str]:
+    kept = []
+    for piece in re.split(r"[。\n]", str(text or "")):
+        bit = piece.strip(" 　、/")
+        if not bit:
+            continue
+        foreign = [item for item in PLACE_CHUNK_RE.findall(bit) if own_name not in item]
+        if foreign:
+            continue
+        if len(bit) > 42:
+            bit = bit[:42]
+        if bit not in kept:
+            kept.append(bit)
+    return kept
+
+
+def ward_line(address: str) -> str:
+    bits = re.findall(r"[一-龥]{1,8}(?:区|市|町|村)", address or "")
+    unique = list(dict.fromkeys(bits))
+    if unique:
+        return " / ".join(unique[:3])
+    compact = re.sub(r"\s+", " ", address or "").strip()
+    return compact[:28]
+
+
 def spot_cards_html(rows: list[dict]) -> str:
     cards = []
+    seen = set()
     for row in rows:
-        name, address, conditions, specs = public_facility(row)
-        if not name or blocked_place(name, address, str(row.get("site_name") or ""), str(row.get("detail_text") or "")):
-            continue
-        feature = strip_confidential(str(row.get("feature") or specs or "")).strip(" 。、/")
-        if conditions and feature.startswith(conditions):
-            feature = feature[len(conditions):].strip(" 。、/")
-        addr_html = f"<p class='spot-addr'>エリア: {html.escape(address)}</p>" if address else ""
-        notes = []
-        if conditions:
-            notes.append(conditions)
-        if feature and feature not in conditions:
-            notes.append(feature)
-        note_html = f"<p class='spot-feature'>受入条件: {html.escape('、'.join(notes))}</p>" if notes else ""
-        cards.append(
-            "<article class='spot'>"
-            f"<h3>{html.escape(name)}</h3>"
-            f"{addr_html}{note_html}"
-            "</article>"
-        )
+        raw_name = str(row.get("location_name") or "").strip()
+        names = split_glued_places(raw_name) if len(split_glued_places(raw_name)) >= 2 else [raw_name]
+        for name in names:
+            name = DATE_LEAK_RE.sub("", name).strip(" 　")
+            key = re.sub(r"\s+", "", name)
+            if len(name) < 2 or key in seen or name in {"学校", "ビル", "病院", "家", "オフィス", "会社", "民家"}:
+                continue
+            address = ward_line(str(row.get("address") or ""))
+            if blocked_place(name, address, str(row.get("site_name") or ""), ""):
+                continue
+            _, _, conditions, specs = public_facility(row if name == raw_name else {**row, "location_name": name, "detail_text": "", "feature": "", "accept_terms": "", "facility_spec": ""})
+            feature_bits = own_clauses(str(row.get("feature") or specs or ""), name) if name == raw_name else []
+            condition_bits = own_clauses(conditions, name) if name == raw_name else []
+            feature = " / ".join(bit for bit in feature_bits if bit not in condition_bits)
+            condition = " / ".join(condition_bits)
+            seen.add(key)
+            index = len(cards) + 1
+            addr_html = f"<p class='spot-addr'>エリア: {html.escape(address)}</p>" if address else ""
+            feature_html = f"<p class='spot-feature'>特徴: {html.escape(feature)}</p>" if feature else ""
+            cond_html = f"<p class='spot-cond'>撮影受入条件: {html.escape(condition)}</p>" if condition else ""
+            cards.append(
+                "<article class='spot'>"
+                f"<h3><span class='spot-no'>{index}</span>{html.escape(name)}</h3>"
+                f"{addr_html}{feature_html}{cond_html}"
+                "</article>"
+            )
     if not cards:
         return ""
     return "<div class='spot-list'>" + "".join(cards) + "</div>"
@@ -1608,47 +1720,43 @@ def unique_places(rows: list[dict]) -> list[dict]:
 
 def parse_location_lines(text: str) -> list[dict]:
     raw = loosen_candidates(EMPTY_HIT_RE.sub("", text or ""))
+    raw = re.sub(r"[ \t]+(?=[-・]\s+)", "\n", raw)
     rows = []
     for line in raw.splitlines():
         stripped = line.strip()
-        if not re.match(r"^[-・]\s+\S", stripped):
+        if not stripped:
             continue
         body = re.sub(r"^[-・]\s*", "", stripped)
+        body = re.sub(r"^\d{1,2}[\.．、]\s*", "", body)
         parts = [part.strip() for part in re.split(r"\s*[/／]\s*", body) if part.strip()]
-        if not parts:
-            continue
-        name = re.sub(r"^(?:施設名|店名)\s*[:：]\s*", "", parts[0]).strip()
-        area = parts[1] if len(parts) > 1 else ""
-        rest = "。".join(parts[2:]) if len(parts) > 2 else ""
         if len(parts) == 1:
-            matched = re.match(r"(.+?)[（(]([^）)]+)[）)]\s*(.*)", name)
+            matched = re.match(r"(.+?)[（(]([^）)]+)[）)]\s*(.*)", parts[0])
             if matched:
-                name, area, rest = matched.group(1).strip(), matched.group(2).strip(), matched.group(3).strip()
-        name = DATE_LEAK_RE.sub("", name).strip(" 　")
-        if len(name) < 2 or EMPTY_HIT_RE.search(name) or name in {"学校", "ビル", "病院", "家", "オフィス", "会社", "民家"}:
-            continue
-        area = DATE_LEAK_RE.sub("", strip_confidential(area)).strip()
-        rest = strip_confidential(rest)
-        conditions, specs = split_facility_notes(rest)
-        feature = rest
-        if "【利用条件】" in feature:
-            feature = feature.split("【利用条件】", 1)[0].strip(" 。、/")
-        row = {
-            "location_name": name,
-            "address": area,
-            "works_title": "",
-            "accept_terms": conditions,
-            "facility_spec": specs,
-            "feature": feature,
-            "detail_text": rest,
-            "site_name": "kanto-public",
-        }
-        if re.search(r"自宅|個人宅|実家", name + area):
-            continue
-        if not acceptable_public_row(row):
-            continue
-        rows.append(row)
-    return unique_places(rows)[:16]
+                parts = [matched.group(1).strip(), matched.group(2).strip(), matched.group(3).strip()]
+        for name, area, rest in facility_triples(parts):
+            name = DATE_LEAK_RE.sub("", re.sub(r"^(?:施設名|店名)\s*[:：]\s*", "", name)).strip(" 　")
+            if len(name) < 2 or EMPTY_HIT_RE.search(name) or name in {"学校", "ビル", "病院", "家", "オフィス", "会社", "民家"}:
+                continue
+            area = DATE_LEAK_RE.sub("", strip_confidential(area)).strip()
+            rest = strip_confidential(rest)
+            conditions, specs = split_facility_notes(rest)
+            feature = rest.split("【利用条件】", 1)[0].strip(" 。、/") if rest else ""
+            row = {
+                "location_name": name,
+                "address": area,
+                "works_title": "",
+                "accept_terms": conditions,
+                "facility_spec": specs,
+                "feature": feature,
+                "detail_text": rest,
+                "site_name": "kanto-public",
+            }
+            if re.search(r"自宅|個人宅|実家", name + area):
+                continue
+            if not acceptable_public_row(row):
+                continue
+            rows.append(row)
+    return unique_places(rows)[:40]
 
 
 def prefer_tokyo(rows: list[dict]) -> list[dict]:
@@ -2418,15 +2526,23 @@ def apply_theme():
     }
     .loc-lead { margin: 0 0 12px; color: #334155; font-size: 14px; }
     .talk { margin: 0 0 14px; color: #1e293b; font-size: 0.98rem; line-height: 1.75; }
-    .spot-list { margin: 12px 0 0; display: flex; flex-direction: column; gap: 8px; }
+    .spot-list { margin: 12px 0 0; display: flex; flex-direction: column; gap: 12px; }
     .spot {
-        margin: 0; padding: 12px 14px; border-radius: 16px;
+        display: block; margin: 0; padding: 14px 16px; border-radius: 16px;
         background: #ffffff; border: 1px solid rgba(148, 163, 184, 0.35);
         box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
     }
-    .spot h3 { margin: 0 0 4px; color: #0f172a; font-size: 1rem; font-weight: 700; line-height: 1.4; }
-    .spot-addr { margin: 0; color: #64748b; font-size: 0.86rem; line-height: 1.5; }
-    .spot-feature { margin: 4px 0 0; color: #334155; font-size: 0.9rem; line-height: 1.55; }
+    .spot h3 {
+        display: flex; align-items: baseline; gap: 8px;
+        margin: 0 0 8px; color: #0f172a; font-size: 1.2rem; font-weight: 800; line-height: 1.35;
+    }
+    .spot-no {
+        flex: 0 0 auto; color: #ef4444; font-size: 1.05rem; font-weight: 800;
+    }
+    .spot-addr, .spot-feature, .spot-cond {
+        display: block; margin: 4px 0 0 1.7rem; color: #334155; font-size: 0.92rem; line-height: 1.55;
+    }
+    .spot-addr { color: #64748b; }
     .spot-badges { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
     .spot-badge {
         display: inline-block; padding: 3px 8px; border-radius: 999px;
