@@ -1647,7 +1647,7 @@ def split_map_locator(value: str) -> tuple[str, str]:
         candidate = unquote(query[key][0]).replace("+", " ").strip()
         if re.match(r"^-?\d+(?:\.\d+)?\s*,\s*-?\d+", candidate):
             continue
-        candidate = DATE_LEAK_RE.sub("", strip_confidential(candidate)).strip(" 、/")
+        candidate = strip_confidential(DATE_LEAK_RE.sub(" ", candidate)).strip(" 、/")
         if candidate and not candidate.lower().startswith("http"):
             return candidate, text
     matched = re.search(r"/place/([^/]+)", parsed.path or "")
