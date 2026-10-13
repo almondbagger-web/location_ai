@@ -809,7 +809,7 @@ def acceptable_public_row(row: dict) -> bool:
 
     name = str(row.get("location_name") or "").strip()
     compact = re.sub(r"\s+", "", name)
-    if len(name) < 2 or len(compact) > 42:
+    if len(name) < 2 or len(compact) > 80:
         return False
     if FORM_NAME_RE.search(compact) or PRIVATE_NAME_RE.search(compact):
         return False
@@ -866,7 +866,8 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
     quoted = ", ".join(f'"{name}"' for name in use)
     school_sql, school_params = school_filter_sql(columns) if school else ("", [])
     order_sql = f" ORDER BY {region_rank_sql()}, id" if "address" in columns else " ORDER BY id"
-    fetch_limit = min(8000, max(800, int(limit or 8000)))
+    unlimited = int(limit or 0) <= 0
+    fetch_limit = 200000 if unlimited else min(8000, max(800, int(limit)))
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
 
@@ -910,9 +911,10 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
                 params.extend([like_param(term)] * len(fields))
             where = " OR ".join(clauses)
             source = ", source_url" if "source_url" in learned_cols else ""
+            learned_cap = 2000 if unlimited else min(400, int(limit) * 8 + len(exclude_keys))
             sql = (
                 f"SELECT {id_sql}title, address, description{source} "
-                f"FROM auto_learned_locations WHERE ({where}) LIMIT {min(400, int(limit) * 8 + len(exclude_keys))}"
+                f"FROM auto_learned_locations WHERE ({where}) LIMIT {learned_cap}"
             )
             mapped = []
             for row in conn.execute(sql, params).fetchall():
@@ -969,11 +971,11 @@ def search_local_locations(query: str, limit: int = 6, exclude_keys: set[str] | 
         if not found and terms:
             found = materialize(run([max(terms, key=len)], "OR"))
         conn.close()
-        pool_cap = max(int(limit or 8000), 40)
+        pool_cap = 200000 if unlimited else max(int(limit), 40)
         ranked = mix_location_hits(found, terms, pool_cap, query)
         if exclude_keys:
             ranked = [row for row in ranked if location_key(row) not in exclude_keys]
-        return ranked[: int(limit)]
+        return ranked if unlimited else ranked[: int(limit)]
     except Exception:
         try:
             conn.close()
@@ -1803,7 +1805,7 @@ def clean_facility_name(text: str) -> str:
 
 def valid_facility_name(name: str) -> bool:
     compact = re.sub(r"\s+", "", name or "")
-    if len(compact) < 2 or len(compact) > 32:
+    if len(compact) < 2 or len(compact) > 80:
         return False
     if compact in GENERIC_PLACE_NAMES or is_admin_name(compact) or is_address_text(compact):
         return False
@@ -1893,22 +1895,68 @@ def facility_triples(parts: list[str]) -> list[tuple[str, str, str]]:
     return rows
 
 
+def mask_public(text: str) -> str:
+    raw = TITLE_MARK_RE.sub("", str(text or ""))
+    raw = DATE_LEAK_RE.sub("", raw)
+    raw = CREDIT_RE.sub("", raw)
+    raw = PHONE_RE.sub("", raw)
+    raw = EMAIL_RE.sub("", raw)
+    raw = PRIVATE_NAME_RE.sub("", raw)
+    raw = re.sub(r"[一-龥々]{1,5}さん", "", raw)
+    return re.sub(r"\s+", "", raw).strip("・、/／")
+
+
+def showable_name(name: str) -> bool:
+    compact = re.sub(r"\s+", "", name or "")
+    if len(compact) < 2 or len(compact) > 80:
+        return False
+    if compact in GENERIC_PLACE_NAMES or is_admin_name(compact):
+        return False
+    if PRIVATE_NAME_RE.search(compact):
+        return False
+    if re.fullmatch(r"[0-9０-９〒\-ー]+", compact):
+        return False
+    if DATE_LEAK_RE.search(compact) or TITLE_MARK_RE.search(name or ""):
+        return False
+    return True
+
+
+def bullet_lines(row: dict) -> list[str]:
+    places = expand_place_rows(row)
+    if not places:
+        name = mask_public(clean_facility_name(str(row.get("location_name") or "")))
+        if not showable_name(name):
+            return []
+        places = [{
+            "location_name": name,
+            "address": row.get("address") or "",
+            "scene": row.get("scene") or row.get("scenes_category") or "",
+        }]
+    lines = []
+    for place in places:
+        name = mask_public(str(place.get("location_name") or ""))
+        if not showable_name(name):
+            continue
+        address = format_address(mask_public(str(place.get("address") or ""))) or "要確認"
+        scene = abstract_scene(mask_public(str(place.get("scene") or place.get("scenes_category") or "")))
+        scene = (scene or "汎用撮影").replace(" / ", "・")
+        lines.append(f"・{html.escape(name)}：{html.escape(address)}【{html.escape(scene)}】")
+    return lines
+
+
 def spot_cards_html(rows: list[dict]) -> str:
     lines = []
     seen = set()
     for row in rows:
-        for place in expand_place_rows(row):
-            name = place["location_name"]
-            address = format_address(place.get("address") or "") or "要確認"
-            scene = (place.get("scene") or "汎用撮影").replace(" / ", "・")
-            key = re.sub(r"\s+", "", name) + "|" + address
+        for line in bullet_lines(row):
+            key = re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", line))
             if key in seen:
                 continue
             seen.add(key)
-            lines.append(f"・{html.escape(name)}：{html.escape(address)}【{html.escape(scene)}】")
+            lines.append(f"<li>{line}</li>")
     if not lines:
         return ""
-    return "<div class='line-list'>" + "<br>".join(lines) + "</div>"
+    return "<ul class='line-list'>" + "".join(lines) + "</ul>"
 
 
 def drop_empty_claims(text: str) -> str:
@@ -1970,7 +2018,7 @@ def parse_location_lines(text: str) -> list[dict]:
             if not acceptable_public_row(row):
                 continue
             rows.append(row)
-    return unique_places(rows)[:40]
+    return unique_places(rows)
 
 
 def prefer_tokyo(rows: list[dict]) -> list[dict]:
@@ -2065,14 +2113,10 @@ def unique_listed(rows: list[dict]) -> list[dict]:
     return unique
 
 
-def gather_location_rows(query: str, limit: int = 8000, exclude_keys: set[str] | None = None) -> list[dict]:
+def gather_location_rows(query: str, limit: int = 0, exclude_keys: set[str] | None = None) -> list[dict]:
     pool: list[dict] = []
     try:
         pool.extend(search_sheet_keywords(query, limit=0))
-    except Exception:
-        pass
-    try:
-        pool.extend(search_local_locations(query, limit=limit, exclude_keys=exclude_keys) or [])
     except Exception:
         pass
     try:
@@ -2080,7 +2124,13 @@ def gather_location_rows(query: str, limit: int = 8000, exclude_keys: set[str] |
     except Exception:
         pass
     found = prefer_tokyo(unique_listed(pool))
-    return found if limit <= 0 else found[:limit]
+    if exclude_keys:
+        found = [row for row in found if location_key(row) not in exclude_keys]
+    if is_school_query(query):
+        found = [row for row in found if acceptable_school_row(row)]
+    if int(limit or 0) > 0:
+        return found[: int(limit)]
+    return found
 
 
 def suggest_location_rows(user_text: str, existing: list[dict], messages: list[dict] | None) -> list[dict]:
@@ -2152,8 +2202,11 @@ def detail_reply(user_text: str, messages: list[dict] | None = None) -> tuple[st
     facts = []
     for row in places:
         name, address, conditions, specs = public_facility(row)
-        scene = abstract_scene(str(row.get("scene") or row.get("scenes_category") or ""))
-        address = format_address(address) or address
+        name = mask_public(name)
+        scene = abstract_scene(mask_public(str(row.get("scene") or row.get("scenes_category") or "")))
+        address = format_address(mask_public(address)) or "要確認"
+        conditions = mask_public(conditions) or "要相談"
+        specs = mask_public(specs)
         facts.append(
             "\n".join(
                 part for part in (
@@ -2178,10 +2231,10 @@ def detail_reply(user_text: str, messages: list[dict] | None = None) -> tuple[st
     spoken = drop_empty_claims(spoken)
     if not spoken and facts:
         head = places[0]
-        name = str(head.get("location_name") or "")
-        address = format_address(str(head.get("address") or ""))
-        scene = abstract_scene(str(head.get("scene") or head.get("scenes_category") or ""))
-        condition = str(head.get("condition") or head.get("accept_terms") or "") or "要相談"
+        name = mask_public(str(head.get("location_name") or ""))
+        address = format_address(mask_public(str(head.get("address") or ""))) or "要確認"
+        scene = abstract_scene(mask_public(str(head.get("scene") or head.get("scenes_category") or "")))
+        condition = mask_public(str(head.get("condition") or head.get("accept_terms") or "")) or "要相談"
         spoken = f"{name}（{address}）の撮影受入は{condition}です。向いているシーンは{scene}です。搬入や夜間の細目は、施設ごとの事前申請で確認します。"
     if not spoken:
         return "", False
@@ -2190,28 +2243,43 @@ def detail_reply(user_text: str, messages: list[dict] | None = None) -> tuple[st
 
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
     try:
+        st.session_state.last_match_count = None
+    except Exception:
+        pass
+    try:
         if is_detail_question(user_text):
             return detail_reply(user_text, messages)
         more = is_more_request(user_text)
         query = followup_query(user_text) if more else user_text
         exclude = shown_location_keys(more)
-        rows = gather_location_rows(query, limit=8000, exclude_keys=exclude) if str(query or "").strip() else []
-        if not rows:
-            rows = unique_listed(suggest_location_rows(user_text, rows, messages))
-        if rows:
-            remember_locations(rows, query, more)
+        rows = gather_location_rows(query, limit=0, exclude_keys=exclude) if str(query or "").strip() else []
         listing = spot_cards_html(rows)
+        try:
+            st.session_state.last_match_count = len(rows) if listing else 0
+        except Exception:
+            pass
+        if rows and listing:
+            remember_locations(rows, query, more)
         if not listing:
             return "", False
         return listing, True
     except Exception:
+        try:
+            st.session_state.last_match_count = 0
+        except Exception:
+            pass
         return "", False
 
 
 SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 
 
-def open_master_worksheet():
+SPREADSHEET_ID = "1wqzKFN5GqvLjURzJNZ_ypNOC1jaYfYlVj6eDlAcUH44"
+QUERY_SHEET_NAME = "未解決クエリ"
+QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
+
+
+def open_master_book():
     raw = ""
     try:
         raw = str(st.secrets.get("GCP_SA_KEY", "") or "")
@@ -2231,11 +2299,75 @@ def open_master_worksheet():
         creds = Credentials.from_service_account_file(str(BASE / "google-credentials.json"), scopes=scopes)
     else:
         return None
-    book = gspread.authorize(creds).open("YUMI-CHA_ロケ地・お弁当マスター")
+    client = gspread.authorize(creds)
+    try:
+        return client.open_by_key(SPREADSHEET_ID)
+    except Exception:
+        return client.open("YUMI-CHA_ロケ地・お弁当マスター")
+
+
+def open_master_worksheet():
+    import gspread
+
+    book = open_master_book()
+    if book is None:
+        return None
     try:
         return book.worksheet("シート1")
     except gspread.WorksheetNotFound:
         return book.sheet1
+
+
+def ensure_query_sheet(book):
+    import gspread
+
+    try:
+        worksheet = book.worksheet(QUERY_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        worksheet = book.add_worksheet(title=QUERY_SHEET_NAME, rows=5000, cols=6)
+        worksheet.append_row(QUERY_HEADER, value_input_option="RAW")
+        return worksheet
+    head = worksheet.row_values(1)
+    if not head:
+        worksheet.append_row(QUERY_HEADER, value_input_option="RAW")
+    elif head[0] != "質問":
+        worksheet.insert_row(QUERY_HEADER, index=1, value_input_option="RAW")
+    return worksheet
+
+
+def record_chat_query(query: str, reply: str) -> None:
+    import time
+
+    text = re.sub(r"\s+", " ", str(query or "")).strip()
+    if not text:
+        return
+    visible = re.sub(r"<[^>]+>", "", reply or "")
+    counted = None
+    try:
+        if "last_match_count" in st.session_state and st.session_state.get("last_match_count") is not None:
+            counted = int(st.session_state.get("last_match_count") or 0)
+    except Exception:
+        counted = None
+    unresolved = not visible.strip() or bool(EMPTY_HIT_RE.search(visible)) or looks_like_failure(visible)
+    if counted == 0:
+        unresolved = True
+    if is_detail_question(text) and visible.strip() and not EMPTY_HIT_RE.search(visible):
+        unresolved = False
+    book = open_master_book()
+    if book is None:
+        return
+    worksheet = ensure_query_sheet(book)
+    worksheet.append_row(
+        [
+            text[:500],
+            "true" if unresolved else "false",
+            "【未解決】" if unresolved else "",
+            "" if counted is None else str(counted),
+            time.strftime("%Y-%m-%d %H:%M"),
+            "open" if unresolved else "resolved",
+        ],
+        value_input_option="RAW",
+    )
 
 
 def sheet_rows() -> list[dict]:
@@ -2908,7 +3040,8 @@ def apply_theme():
     }
     .loc-lead { margin: 0 0 12px; color: #334155; font-size: 14px; }
     .talk { margin: 0 0 14px; color: #1e293b; font-size: 0.98rem; line-height: 1.75; }
-    .line-list { margin: 8px 0 0; color: #0f172a; font-size: 0.98rem; line-height: 1.75; }
+    .line-list { list-style: none; margin: 8px 0 0; padding: 0; color: #0f172a; font-size: 0.98rem; line-height: 1.75; }
+    .line-list li { margin: 0 0 2px; }
     .spot-list { margin: 12px 0 0; display: flex; flex-direction: column; gap: 12px; }
     .spot {
         display: block; margin: 0; padding: 14px 16px; border-radius: 16px;
@@ -3509,6 +3642,10 @@ def render_chat(avatar_b64: str):
                 break
         image = st.session_state.pop("outbound_image", None)
         mime = st.session_state.pop("outbound_mime", None)
+        try:
+            st.session_state.last_match_count = None
+        except Exception:
+            pass
         with st.spinner("YUMI-CHAが20年の現場アーカイブを照合しています..."):
             try:
                 reply, as_html = produce_reply(last_user, st.session_state.messages, image, mime)
@@ -3527,6 +3664,10 @@ def render_chat(avatar_b64: str):
                         reply, as_html = "", False
                 except Exception:
                     reply, as_html = "", False
+            try:
+                record_chat_query(last_user, reply)
+            except Exception:
+                pass
         if reply:
             st.session_state.messages.append({"role": "assistant", "content": reply, "html": as_html})
         st.rerun()
