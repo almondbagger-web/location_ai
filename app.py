@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sqlite3
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
@@ -3182,6 +3183,7 @@ QUERY_SHEET_NAME = "未解決クエリ"
 QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
 LOG_SHEET_NAME = "検索ログ"
 LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
+LOG_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwbCFfHNgTjWMtz33UpyXlI1YeO1ovSwWQur_FOsTqjoPbJAjljY8TM-KONc_iI59sOKg/exec"
 
 
 def open_master_book():
@@ -3315,6 +3317,54 @@ def record_chat_query(query: str, reply: str) -> None:
 
     try:
         threading.Thread(target=write_row, daemon=True).start()
+    except Exception:
+        return
+
+
+def ensure_session_id() -> str:
+    try:
+        current = str(st.session_state.get("session_id") or "")
+    except Exception:
+        current = ""
+    if current:
+        return current
+    current = uuid.uuid4().hex
+    try:
+        st.session_state.session_id = current
+    except Exception:
+        pass
+    return current
+
+
+def post_search_log(prompt: str) -> None:
+    import threading
+
+    text = str(prompt or "").strip()
+    url = str(LOG_WEBHOOK_URL or "").strip()
+    if not text or not url.startswith("http"):
+        return
+    payload = json.dumps(
+        {"prompt": text[:2000], "session_id": ensure_session_id()},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    def send() -> None:
+        try:
+            import urllib.request
+
+            request = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                response.read()
+        except Exception:
+            return
+
+    try:
+        threading.Thread(target=send, daemon=True).start()
     except Exception:
         return
 
@@ -4769,6 +4819,10 @@ def render_chat(avatar_b64: str):
         image = st.session_state.pop("outbound_image", None)
         mime = st.session_state.pop("outbound_mime", None)
         try:
+            post_search_log(last_user)
+        except Exception:
+            pass
+        try:
             st.session_state.last_match_count = None
         except Exception:
             pass
@@ -4844,6 +4898,7 @@ def main():
     st.session_state.setdefault("pending_image", None)
     st.session_state.setdefault("shown_locations", [])
     st.session_state.setdefault("last_location_query", "")
+    st.session_state.setdefault("session_id", uuid.uuid4().hex)
     consume_map_payload()
     consume_speech()
     avatar_b64 = file_b64(AVATAR_PATH)
