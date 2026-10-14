@@ -121,6 +121,7 @@ ADSENSE_CLIENT = "ca-pub-3232944598825832"
 ADSENSE_SLOT_MAIN = "0000000000"
 ADSENSE_SLOT_SIDE = "3888878698"
 YOUTUBE_MV_URL = "https://youtube.com/@akbb_a.i.kuchipakubandbrothers?si=pk7gAKZ_JMLz1q_2"
+TUNECORE_URL = "https://www.tunecore.co.jp/artists?id=1169004"
 SHARE_PAGE = "https://yumi-cha.streamlit.app/"
 MAP_TOOL_URL = "https://map.almondbagger.com/"
 OFFICIAL_SITE_URL = "https://www.almondbagger.com/"
@@ -4874,8 +4875,12 @@ def render_sidebar():
         with st.container(key="nav"):
             st.button("総合表示", icon=":material/dashboard:", key="nav_overview", width="stretch", type="primary")
         st.markdown(
-            """
+            f"""
             <div class="side-links">
+                <a class="cyber-link-btn" href="{html.escape(OFFICIAL_SITE_URL, quote=True)}" target="_blank" rel="noopener noreferrer">🌐 会社公式HP</a>
+                <a class="cyber-link-btn" href="{html.escape(MAP_TOOL_URL, quote=True)}" target="_blank" rel="noopener noreferrer">🗺️ ロケ地図ツクール</a>
+                <a class="cyber-link-btn artist" href="{html.escape(TUNECORE_URL, quote=True)}" target="_blank" rel="noopener noreferrer">🎵 TuneCore</a>
+                <a class="cyber-link-btn youtube" href="{html.escape(YOUTUBE_MV_URL, quote=True)}" target="_blank" rel="noopener noreferrer">🎬 公式MV「いいねの大盤振る舞い」</a>
                 <a class="cyber-link-btn report" href="mailto:info@almondbagger.com?subject=%E3%80%90YUMI-CHA%E6%94%B9%E5%96%84%E8%A6%81%E6%9C%9B%E3%80%91">📩 要望・不具合を報告</a>
             </div>
             """,
@@ -5228,6 +5233,15 @@ def render_overview():
     st.markdown(
         '<div class="catch">アーティストYUMITAの20年間の現場の汗、判断、知恵を、1秒で。</div>'
         '<div class="subcatch">Production Brain OS  /  almond bagger</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="ext-row">
+            <a class="ext" href="{html.escape(OFFICIAL_SITE_URL, quote=True)}" target="_blank" rel="noopener noreferrer">会社公式HP</a>
+            <a class="ext" href="{html.escape(MAP_TOOL_URL, quote=True)}" target="_blank" rel="noopener noreferrer">ロケ地図ツクール</a>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
