@@ -3198,6 +3198,11 @@ QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "�
 LOG_SHEET_NAME = "検索ログ"
 LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
 LOG_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwdXwBo7Nz6SdEbB1G5CvBhLW0gx9a-wPndjgCu17cwFHpXYVCxTqxfI0lZ-xjeEUXK/exec"
+NOTION_API_KEY = "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"
+NOTION_DATABASE_ID = "3f9cc5c0-068a-8018-a9a9-eeebcf629313"
+NOTION_VERSION = "2022-06-28"
+NOTION_PAGES_URL = "https://api.notion.com/v1/pages"
+_NOTION_TITLE_KEY = ""
 
 
 def open_master_book():
@@ -3350,17 +3355,103 @@ def ensure_session_id() -> str:
     return current
 
 
+def notion_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": NOTION_VERSION,
+    }
+
+
+def notion_title_property() -> str:
+    global _NOTION_TITLE_KEY
+    if _NOTION_TITLE_KEY:
+        return _NOTION_TITLE_KEY
+    import requests
+
+    response = requests.get(
+        f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}",
+        headers=notion_headers(),
+        timeout=8,
+    )
+    response.raise_for_status()
+    properties = (response.json() or {}).get("properties") or {}
+    for name, spec in properties.items():
+        if isinstance(spec, dict) and spec.get("type") == "title":
+            _NOTION_TITLE_KEY = str(name)
+            return _NOTION_TITLE_KEY
+    _NOTION_TITLE_KEY = "名前"
+    return _NOTION_TITLE_KEY
+
+
+def post_notion_log(prompt: str, session_id: str) -> None:
+    import threading
+    import time
+
+    text = str(prompt or "").strip()[:2000]
+    if not text:
+        return
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _post() -> None:
+        try:
+            import requests
+
+            title_key = notion_title_property()
+            payload = {
+                "parent": {"database_id": NOTION_DATABASE_ID},
+                "properties": {
+                    title_key: {"title": [{"text": {"content": text}}]},
+                },
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [
+                                {
+                                    "type": "text",
+                                    "text": {"content": f"session_id: {session_id}\n日時: {stamp}"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+            response = requests.post(
+                NOTION_PAGES_URL,
+                headers=notion_headers(),
+                json=payload,
+                timeout=8,
+            )
+            if response.status_code >= 400:
+                print(f"[NOTION ERROR] Status: {response.status_code}, Response: {response.text}")
+                return
+            print(f"[NOTION SUCCESS] Status: {response.status_code}, Response: {response.text}")
+        except Exception as e:
+            print(f"[NOTION ERROR] Failed to create Notion page: {e}")
+
+    try:
+        threading.Thread(target=_post, daemon=True).start()
+    except Exception as e:
+        print(f"[NOTION ERROR] Failed to create Notion page: {e}")
+
+
 def post_search_log(prompt: str) -> None:
     import threading
 
     text = str(prompt or "").strip()
-    url = str(LOG_WEBHOOK_URL or "").strip()
     if not text:
         return
+    session_id = ensure_session_id()
+    try:
+        post_notion_log(text, session_id)
+    except Exception as e:
+        print(f"[NOTION ERROR] Failed to create Notion page: {e}")
+    url = str(LOG_WEBHOOK_URL or "").strip()
     if not url or "ここに" in url or not url.startswith("http"):
         print("[LOG WARNING] LOG_WEBHOOK_URL is not set properly.")
         return
-    session_id = ensure_session_id()
 
     def _post() -> None:
         try:
