@@ -270,11 +270,6 @@ def founder_card_html() -> str:
     <li>20年間にわたり映画・ドラマの現場最前線を支えてきた制作のスペシャリスト。</li>
     <li>現在は現場の知見をテクノロジーに昇華させつつ、アーティストとして音楽活動も展開中。</li>
   </ul>
-  <div class="founder-links">
-    <a href="https://www.almondbagger.com/" target="_blank" rel="noopener noreferrer">🌐 会社公式HP・実績</a>
-    <a class="artist" href="https://www.tunecore.co.jp/artists?id=1169004" target="_blank" rel="noopener noreferrer">🎵 TuneCore アーティストページ</a>
-    <a href="https://map.almondbagger.com/" target="_blank" rel="noopener noreferrer">🗺️ ロケ地図ツクール</a>
-  </div>
 </article>
 """
 
@@ -3149,9 +3144,7 @@ MAP_PROMO_HTML = (
 
 
 def with_map_promo(body: str) -> str:
-    if not body or body == RETRY_LIST_HTML or "line-list" not in body or "map-promo" in body:
-        return body
-    return body + MAP_PROMO_HTML
+    return body
 
 
 def location_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
@@ -4584,21 +4577,12 @@ def apply_theme():
         margin-top: 8px;
     }
     .tool-result strong { color: #c4161c; }
-    .st-key-prod_tools [data-baseweb="tab-highlight"] { background: #c4161c !important; }
-    div[data-baseweb="input"],
-    div[data-baseweb="select"],
-    div[data-baseweb="base-input"],
-    .stTextInput input,
+    div[data-baseweb="input"] input,
+    div[data-baseweb="base-input"] input,
     .stDateInput input,
-    .stTimeInput input,
-    .stNumberInput input,
+    .stTextInput input,
     .stSelectbox div {
         background-color: #FFFFFF !important;
-        color: #111111 !important;
-        border: 1px solid #CBD5E1 !important;
-        border-radius: 8px !important;
-    }
-    input {
         color: #111111 !important;
         -webkit-text-fill-color: #111111 !important;
     }
@@ -4892,10 +4876,6 @@ def render_sidebar():
         st.markdown(
             """
             <div class="side-links">
-                <a class="cyber-link-btn" href="https://www.almondbagger.com/" target="_blank" rel="noopener noreferrer">🌐 会社公式HP (ALMOND BAGGER)</a>
-                <a class="cyber-link-btn" href="https://map.almondbagger.com/" target="_blank" rel="noopener noreferrer">🗺️ ロケ地図ツクール</a>
-                <a class="cyber-link-btn artist" href="https://www.tunecore.co.jp/artists?id=1169004" target="_blank" rel="noopener noreferrer">🎵 TuneCore (YUMITA Official)</a>
-                <a class="cyber-link-btn youtube" href="https://youtube.com/@akbb_a.i.kuchipakubandbrothers?si=pk7gAKZ_JMLz1q_2" target="_blank" rel="noopener noreferrer">🎬 弊社制作MV（YouTube）</a>
                 <a class="cyber-link-btn report" href="mailto:info@almondbagger.com?subject=%E3%80%90YUMI-CHA%E6%94%B9%E5%96%84%E8%A6%81%E6%9C%9B%E3%80%91">📩 要望・不具合を報告</a>
             </div>
             """,
@@ -4904,7 +4884,6 @@ def render_sidebar():
         with st.container(key="reset"):
             st.button("🧹 会話をリセット", key="reset_chat", width="stretch", on_click=reset_chat)
         render_share()
-        render_sponsor(ADSENSE_SLOT_SIDE, "side")
 
 
 SUGGESTIONS = (
@@ -5191,143 +5170,54 @@ def previous_business_day(day: date) -> date:
     return cursor
 
 
-BENTO_SHOPS = (
-    {"name": "ポパイ", "fit": ("早朝ロケバス", "通常昼食"), "low": 700, "high": 950, "hold": "冷めても味が落ちにくい定番", "ratio": "肉6：魚2：野菜2"},
-    {"name": "金兵衛", "fit": ("通常昼食", "勝負日/立ち会い", "特機/アクション"), "low": 850, "high": 1200, "hold": "肉が厚く、長丁場でも足りる", "ratio": "肉7：魚1：野菜2"},
-    {"name": "津多屋", "fit": ("勝負日/立ち会い", "通常昼食"), "low": 1000, "high": 1400, "hold": "立ち会い日の見栄えと味", "ratio": "肉4：魚3：野菜3"},
-    {"name": "喜山飯店", "fit": ("深夜建て込み", "通常昼食"), "low": 800, "high": 1200, "hold": "中華は冷めても食べやすい", "ratio": "肉5：魚2：野菜3"},
-    {"name": "オーベルジーヌ", "fit": ("早朝ロケバス", "通常昼食"), "low": 900, "high": 1300, "hold": "朝のロケバスでも重いおかずを避ける", "ratio": "肉3：魚3：野菜4"},
-)
-
-
-def recommend_bento(timing: str, budget: int) -> list[dict]:
-    ranked = []
-    for shop in BENTO_SHOPS:
-        score = 2 if timing in shop["fit"] else 0
-        if budget <= 0 or shop["low"] <= budget <= shop["high"]:
-            score += 2
-        elif budget > shop["high"]:
-            score += 1
-        ranked.append((score, shop))
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    return [shop for score, shop in ranked if score == ranked[0][0]][:2]
-
-
-def spare_count(heads: int) -> int:
-    return max(heads + 2, heads + (heads + 9) // 10)
+def business_days_until(shoot: date, today: date | None = None) -> int:
+    start = today or date.today()
+    if shoot <= start:
+        return 0
+    count = 0
+    day = start + timedelta(days=1)
+    while day < shoot:
+        if is_jp_business_day(day):
+            count += 1
+        day += timedelta(days=1)
+    return count
 
 
 def render_permit_tool():
-    areas = list(dict.fromkeys(row["area"] for row in POLICE_DATA))
-    area = st.selectbox("所轄のエリア", areas, key="permit_area")
-    stations = [row for row in POLICE_DATA if row["area"] == area]
-    station_name = st.selectbox("警察署", [row["station"] for row in stations], key=f"permit_station_{area}")
-    station = next(row for row in stations if row["station"] == station_name)
-    shoot = st.date_input("撮影予定日", value=date.today() + timedelta(days=21), key="permit_shoot")
-    latest = subtract_business_days(shoot, 7)
-    safer = subtract_business_days(shoot, 10)
-    local_limit = subtract_business_days(shoot, 7 + int(station["days"]))
-    greet = previous_business_day(shoot - timedelta(days=3))
-    street = previous_business_day(shoot - timedelta(days=7))
-    holiday_note = ""
-    if shoot.year not in (2026, 2027) and jp_holidays is None:
-        holiday_note = "<p>2026年と2027年以外は、土日だけを除いて実働日を数えています。</p>"
-    st.markdown(
-        "<div class='tool-result'>"
-        f"<p>{html.escape(station_name)}（台帳の目安 {int(station['days'])}日）</p>"
-        f"<p>最終提出リミット（中7実働日） <strong>{html.escape(format_jp_date(latest))}</strong></p>"
-        f"<p>この署を足した提出目安 <strong>{html.escape(format_jp_date(local_limit))}</strong></p>"
-        f"<p>余裕を見る提出日（中10実働日） <strong>{html.escape(format_jp_date(safer))}</strong></p>"
-        "<p>推奨の提出時間は 13:30〜14:00。昼明け直後で、窓口の混雑を避けます。</p>"
-        "<p>作業帯図はミリ単位。車線、カラーコーン、誘導員の立ち位置まで図面に落とします。</p>"
-        f"<p>近隣挨拶状は <strong>{html.escape(format_jp_date(greet))}</strong> まで（3日前。土日祝なら直前の平日）。"
-        f"商店街は <strong>{html.escape(format_jp_date(street))}</strong> まで（1週間前。土日祝なら直前の平日）。</p>"
-        f"{holiday_note}"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    with st.expander(f"{area}の警察署一覧"):
-        for row in stations:
-            st.markdown(f"- {row['station']}　目安 {int(row['days'])}日")
-    park = PARK_DATA.get(area)
-    with st.expander(f"{area}の公園撮影許可"):
-        if not park:
-            st.markdown("このエリアの公園許可は、台帳にまだありません。")
-        else:
-            st.markdown(
-                f"- 窓口: {park['窓口']}\n"
-                f"- 可能時間: {park['可能時間']}\n"
-                f"- 夜間: {park['夜間']}\n"
-                f"- 料金: {park['料金']}\n"
-                f"- NG条件: {park['NG条件']}"
-            )
-
-
-def render_bento_tool():
-    timing = st.selectbox(
-        "食事のタイミング",
-        ("早朝ロケバス", "通常昼食", "勝負日/立ち会い", "特機/アクション", "深夜建て込み"),
-        key="bento_timing",
-    )
-    heads = st.number_input("食数", min_value=1, max_value=500, value=30, step=1, key="bento_heads")
-    budget = st.number_input("1人あたりの予算（円）", min_value=0, max_value=5000, value=1000, step=50, key="bento_budget")
-    picks = recommend_bento(timing, int(budget))
-    lines = []
-    for shop in picks:
-        lines.append(
-            f"<p><strong>{html.escape(shop['name'])}</strong>　目安 {shop['low']}〜{shop['high']}円　{html.escape(shop['hold'])}</p>"
-        )
-    lead = "".join(lines) or "<p>条件に合う店を、発注前にもう一度予算で見てください。</p>"
-    extra = spare_count(int(heads))
-    ratio = picks[0]["ratio"] if picks else "肉5：魚2：野菜3"
-    st.markdown(f"<div class='tool-result'>{lead}<p>{int(heads)}食。価格は現場の目安で、台帳の最低個数ではありません。</p></div>", unsafe_allow_html=True)
-    with st.expander("発注チェックリスト"):
+    shoot = st.date_input("撮影予定日", value=date.today() + timedelta(days=14), key="permit_shoot")
+    available = business_days_until(shoot)
+    if available < 1:
         st.markdown(
-            f"- 車両進入経路と車高2.1m、クランク角を発注票に書く\n"
-            f"- 当日のゴミ回収が店側か、分別して持ち帰りかを先に決める\n"
-            f"- 肉・魚・野菜の比率は {ratio}\n"
-            f"- 予備箸 {extra}本、お茶 {extra}本（食数に予備1割）"
+            "<p style='color:#c4161c;font-weight:700;margin:8px 0 0;'>"
+            "⚠️ 通常の道路使用許可は間に合いません（敷地内またはFC相談）</p>",
+            unsafe_allow_html=True,
         )
-
-
-def render_move_tool():
-    wrap_day = st.date_input("完全撤収の日", value=date.today(), key="move_day")
-    wrap_at = st.time_input("完全撤収予定", value=time(18, 0), step=timedelta(minutes=5), key="move_time")
-    nav_min = st.number_input("Googleマップのナビ時間（分）", min_value=0, max_value=600, value=40, step=5, key="move_nav")
-    truck = st.checkbox("機材トラック（+15分）", key="move_truck")
-    tokki = st.checkbox("特機（+25分）", key="move_tokki")
-    vehicle = (15 if truck else 0) + (25 if tokki else 0)
-    buffer = 20 + 15 + 10 + vehicle
-    start = datetime.combine(wrap_day, wrap_at)
-    depart = start + timedelta(minutes=buffer)
-    arrive = depart + timedelta(minutes=int(nav_min))
-    ready = arrive + timedelta(minutes=15)
-    st.markdown(
-        "<div class='tool-result'>"
-        f"<p>撤収20分＋積込15分＋乗車10分＝45分則。車両加算 {vehicle}分。</p>"
-        f"<p>安全出発 <strong>{html.escape(depart.strftime('%H:%M'))}</strong></p>"
-        f"<p>到着予想 <strong>{html.escape(arrive.strftime('%m/%d %H:%M'))}</strong>（撤収＋45分則＋ナビ＋車両加算）</p>"
-        f"<p>撮影準備完了 <strong>{html.escape(ready.strftime('%m/%d %H:%M'))}</strong>（到着後15分で荷下ろし開始）</p>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+        return
+    grouped: dict[str, list[dict]] = {}
+    for row in POLICE_DATA:
+        if int(row["days"]) <= available:
+            grouped.setdefault(row["area"], []).append(row)
+    if not grouped:
+        st.markdown(
+            "<p style='color:#c4161c;font-weight:700;margin:8px 0 0;'>"
+            "⚠️ 通常の道路使用許可は間に合いません（敷地内またはFC相談）</p>",
+            unsafe_allow_html=True,
+        )
+        return
+    lines = []
+    for area, rows in grouped.items():
+        lines.append(f"<p><strong>{html.escape(area)}</strong></p><ul class='line-list'>")
+        for row in rows:
+            lines.append(
+                f"<li>・{html.escape(row['station'])}　中{int(row['days'])}日</li>"
+            )
+        lines.append("</ul>")
+    st.markdown("<div class='tool-result'>" + "".join(lines) + "</div>", unsafe_allow_html=True)
 
 
 def render_production_tools():
-    with st.container(key="prod_tools"):
-        permit_tab, bento_tab, move_tab = st.tabs(
-            (
-                "🚦 道使・申請逆算シミュレーター",
-                "🍱 ロケ弁セレクター＆発注シミュレーター",
-                "🚐 移動・香盤バッファ計算機",
-            )
-        )
-        with permit_tab:
-            render_permit_tool()
-        with bento_tab:
-            render_bento_tool()
-        with move_tab:
-            render_move_tool()
+    with st.expander("🚨 間に合う道路使用許可（都内警察署）"):
+        render_permit_tool()
 
 
 def render_overview():
@@ -5338,15 +5228,6 @@ def render_overview():
     st.markdown(
         '<div class="catch">アーティストYUMITAの20年間の現場の汗、判断、知恵を、1秒で。</div>'
         '<div class="subcatch">Production Brain OS  /  almond bagger</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        """
-        <div class="ext-row">
-            <a class="ext" href="https://www.almondbagger.com/" target="_blank" rel="noopener noreferrer">会社公式HP</a>
-            <a class="ext" href="https://map.almondbagger.com/" target="_blank" rel="noopener noreferrer">ロケ地図ツクール</a>
-        </div>
-        """,
         unsafe_allow_html=True,
     )
 
@@ -5377,7 +5258,6 @@ def main():
     render_overview()
     render_production_tools()
     render_chat(avatar_b64)
-    render_sponsor(ADSENSE_SLOT_MAIN, "main")
     st.markdown('<div class="page-copy">© ALMONDBAGGER</div>', unsafe_allow_html=True)
 
 
