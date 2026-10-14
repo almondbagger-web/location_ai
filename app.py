@@ -2005,10 +2005,10 @@ def shops_to_text(shops, shop_order_fields, query: str = "") -> str:
 def gemini_api_key() -> str:
     secret = ""
     try:
-        secret = str(st.secrets.get("GEMINI_API_KEY", "") or "")
+        secret = st.secrets.get("GEMINI_API_KEY") or ""
     except Exception:
         secret = ""
-    return (secret or os.getenv("GEMINI_API_KEY") or "").strip()
+    return str(secret or os.environ.get("GEMINI_API_KEY") or "").strip()
 
 
 def gemini_model_name() -> str:
@@ -3198,8 +3198,6 @@ QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "�
 LOG_SHEET_NAME = "検索ログ"
 LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
 LOG_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwdXwBo7Nz6SdEbB1G5CvBhLW0gx9a-wPndjgCu17cwFHpXYVCxTqxfI0lZ-xjeEUXK/exec"
-NOTION_API_KEY = "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"
-NOTION_DATABASE_ID = "3f9cc5c0-068a-8018-a9a9-eeebcf629313"
 NOTION_VERSION = "2022-06-28"
 NOTION_PAGES_URL = "https://api.notion.com/v1/pages"
 _NOTION_TITLE_KEY = ""
@@ -3355,9 +3353,27 @@ def ensure_session_id() -> str:
     return current
 
 
+def notion_api_key() -> str:
+    secret = ""
+    try:
+        secret = st.secrets.get("NOTION_API_KEY") or ""
+    except Exception:
+        secret = ""
+    return str(secret or os.environ.get("NOTION_API_KEY") or "").strip()
+
+
+def notion_database_id() -> str:
+    secret = ""
+    try:
+        secret = st.secrets.get("NOTION_DATABASE_ID", "3f9cc5c0068a8018a9a9eeebcf629313") or ""
+    except Exception:
+        secret = ""
+    return str(secret or os.environ.get("NOTION_DATABASE_ID") or "3f9cc5c0068a8018a9a9eeebcf629313").strip()
+
+
 def notion_headers() -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Authorization": f"Bearer {notion_api_key()}",
         "Content-Type": "application/json",
         "Notion-Version": NOTION_VERSION,
     }
@@ -3370,7 +3386,7 @@ def notion_title_property() -> str:
     import requests
 
     response = requests.get(
-        f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}",
+        f"https://api.notion.com/v1/databases/{notion_database_id()}",
         headers=notion_headers(),
         timeout=8,
     )
@@ -3397,9 +3413,13 @@ def post_notion_log(prompt: str, session_id: str) -> None:
         try:
             import requests
 
+            token = notion_api_key()
+            if not token:
+                print("[NOTION ERROR] NOTION_API_KEY is not set.")
+                return
             title_key = notion_title_property()
             payload = {
-                "parent": {"database_id": NOTION_DATABASE_ID},
+                "parent": {"database_id": notion_database_id()},
                 "properties": {
                     title_key: {"title": [{"text": {"content": text}}]},
                 },
