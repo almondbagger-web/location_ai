@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import uuid
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
@@ -19,6 +20,11 @@ except ImportError:
     pass
 from google import genai
 from google.genai import types
+
+try:
+    import holidays as jp_holidays
+except Exception:
+    jp_holidays = None
 
 SCENE_QUOTE_RE = re.compile(r"[「『][^」』]{0,40}[」』]")
 SCENE_DATE_RE = re.compile(
@@ -4558,6 +4564,27 @@ def apply_theme():
             padding: 0 92px 0 14px !important;
         }
     }
+    .st-key-prod_tools {
+        max-width: 760px;
+        margin: 8px auto 0;
+        background: #fff;
+        border: 1px solid #e6ebf0;
+        border-radius: 18px;
+        padding: 4px 16px 14px;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+    }
+    .tool-result {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 12px 14px;
+        color: #0f172a;
+        line-height: 1.75;
+        font-size: 14px;
+        margin-top: 8px;
+    }
+    .tool-result strong { color: #c4161c; }
+    .st-key-prod_tools [data-baseweb="tab-highlight"] { background: #c4161c !important; }
     </style>
     """
     st.markdown(css.replace("%%BG%%", background), unsafe_allow_html=True)
@@ -4982,6 +5009,162 @@ def render_chat(avatar_b64: str):
     render_composer()
 
 
+def is_jp_business_day(day: date) -> bool:
+    if day.weekday() >= 5:
+        return False
+    if jp_holidays is None:
+        return True
+    try:
+        return day not in jp_holidays.country_holidays("JP", years=day.year)
+    except Exception:
+        try:
+            return day not in jp_holidays.Japan(years=day.year)
+        except Exception:
+            return True
+
+
+def subtract_business_days(shoot: date, count: int) -> date:
+    day = shoot
+    left = max(int(count), 0)
+    guard = 0
+    while left > 0 and guard < 400:
+        day -= timedelta(days=1)
+        guard += 1
+        if is_jp_business_day(day):
+            left -= 1
+    return day
+
+
+def format_jp_date(day: date) -> str:
+    weeks = "月火水木金土日"
+    return f"{day.year}/{day.month}/{day.day}（{weeks[day.weekday()]}）"
+
+
+def previous_business_day(day: date) -> date:
+    cursor = day
+    guard = 0
+    while not is_jp_business_day(cursor) and guard < 14:
+        cursor -= timedelta(days=1)
+        guard += 1
+    return cursor
+
+
+BENTO_SHOPS = (
+    {"name": "ポパイ", "fit": ("早朝ロケバス", "通常昼食"), "low": 700, "high": 950, "hold": "冷めても味が落ちにくい定番", "ratio": "肉6：魚2：野菜2"},
+    {"name": "金兵衛", "fit": ("通常昼食", "勝負日/立ち会い", "特機/アクション"), "low": 850, "high": 1200, "hold": "肉が厚く、長丁場でも足りる", "ratio": "肉7：魚1：野菜2"},
+    {"name": "津多屋", "fit": ("勝負日/立ち会い", "通常昼食"), "low": 1000, "high": 1400, "hold": "立ち会い日の見栄えと味", "ratio": "肉4：魚3：野菜3"},
+    {"name": "喜山飯店", "fit": ("深夜建て込み", "通常昼食"), "low": 800, "high": 1200, "hold": "中華は冷めても食べやすい", "ratio": "肉5：魚2：野菜3"},
+    {"name": "オーベルジーヌ", "fit": ("早朝ロケバス", "通常昼食"), "low": 900, "high": 1300, "hold": "朝のロケバスでも重いおかずを避ける", "ratio": "肉3：魚3：野菜4"},
+)
+
+
+def recommend_bento(timing: str, budget: int) -> list[dict]:
+    ranked = []
+    for shop in BENTO_SHOPS:
+        score = 2 if timing in shop["fit"] else 0
+        if budget <= 0 or shop["low"] <= budget <= shop["high"]:
+            score += 2
+        elif budget > shop["high"]:
+            score += 1
+        ranked.append((score, shop))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [shop for score, shop in ranked if score == ranked[0][0]][:2]
+
+
+def spare_count(heads: int) -> int:
+    return max(heads + 2, heads + (heads + 9) // 10)
+
+
+def render_permit_tool():
+    shoot = st.date_input("撮影予定日", value=date.today() + timedelta(days=21), key="permit_shoot")
+    latest = subtract_business_days(shoot, 7)
+    safer = subtract_business_days(shoot, 10)
+    greet = previous_business_day(shoot - timedelta(days=3))
+    street = previous_business_day(shoot - timedelta(days=7))
+    holiday_note = ""
+    if jp_holidays is None:
+        holiday_note = "<p>祝日データが無いため、土日だけを除いて実働日を数えています。</p>"
+    st.markdown(
+        "<div class='tool-result'>"
+        f"<p>最終提出リミット（中7実働日） <strong>{html.escape(format_jp_date(latest))}</strong></p>"
+        f"<p>余裕を見る提出日（中10実働日） <strong>{html.escape(format_jp_date(safer))}</strong></p>"
+        "<p>推奨の提出時間は 13:30〜14:00。昼明け直後で、窓口の混雑を避けます。</p>"
+        "<p>作業帯図はミリ単位。車線、カラーコーン、誘導員の立ち位置まで図面に落とします。</p>"
+        f"<p>近隣挨拶状は <strong>{html.escape(format_jp_date(greet))}</strong> まで（3日前。土日祝なら直前の平日）。"
+        f"商店街は <strong>{html.escape(format_jp_date(street))}</strong> まで（1週間前。土日祝なら直前の平日）。</p>"
+        f"{holiday_note}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_bento_tool():
+    timing = st.selectbox(
+        "食事のタイミング",
+        ("早朝ロケバス", "通常昼食", "勝負日/立ち会い", "特機/アクション", "深夜建て込み"),
+        key="bento_timing",
+    )
+    heads = st.number_input("食数", min_value=1, max_value=500, value=30, step=1, key="bento_heads")
+    budget = st.number_input("1人あたりの予算（円）", min_value=0, max_value=5000, value=1000, step=50, key="bento_budget")
+    picks = recommend_bento(timing, int(budget))
+    lines = []
+    for shop in picks:
+        lines.append(
+            f"<p><strong>{html.escape(shop['name'])}</strong>　目安 {shop['low']}〜{shop['high']}円　{html.escape(shop['hold'])}</p>"
+        )
+    lead = "".join(lines) or "<p>条件に合う店を、発注前にもう一度予算で見てください。</p>"
+    extra = spare_count(int(heads))
+    ratio = picks[0]["ratio"] if picks else "肉5：魚2：野菜3"
+    st.markdown(f"<div class='tool-result'>{lead}<p>{int(heads)}食。価格は現場の目安で、台帳の最低個数ではありません。</p></div>", unsafe_allow_html=True)
+    with st.expander("発注チェックリスト"):
+        st.markdown(
+            f"- 車両進入経路と車高2.1m、クランク角を発注票に書く\n"
+            f"- 当日のゴミ回収が店側か、分別して持ち帰りかを先に決める\n"
+            f"- 肉・魚・野菜の比率は {ratio}\n"
+            f"- 予備箸 {extra}本、お茶 {extra}本（食数に予備1割）"
+        )
+
+
+def render_move_tool():
+    wrap_day = st.date_input("完全撤収の日", value=date.today(), key="move_day")
+    wrap_at = st.time_input("完全撤収予定", value=time(18, 0), step=timedelta(minutes=5), key="move_time")
+    nav_min = st.number_input("Googleマップのナビ時間（分）", min_value=0, max_value=600, value=40, step=5, key="move_nav")
+    truck = st.checkbox("機材トラック（+15分）", key="move_truck")
+    tokki = st.checkbox("特機（+25分）", key="move_tokki")
+    vehicle = (15 if truck else 0) + (25 if tokki else 0)
+    buffer = 20 + 15 + 10 + vehicle
+    start = datetime.combine(wrap_day, wrap_at)
+    depart = start + timedelta(minutes=buffer)
+    arrive = depart + timedelta(minutes=int(nav_min))
+    ready = arrive + timedelta(minutes=15)
+    st.markdown(
+        "<div class='tool-result'>"
+        f"<p>撤収20分＋積込15分＋乗車10分＝45分則。車両加算 {vehicle}分。</p>"
+        f"<p>安全出発 <strong>{html.escape(depart.strftime('%H:%M'))}</strong></p>"
+        f"<p>到着予想 <strong>{html.escape(arrive.strftime('%m/%d %H:%M'))}</strong>（撤収＋45分則＋ナビ＋車両加算）</p>"
+        f"<p>撮影準備完了 <strong>{html.escape(ready.strftime('%m/%d %H:%M'))}</strong>（到着後15分で荷下ろし開始）</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_production_tools():
+    with st.container(key="prod_tools"):
+        permit_tab, bento_tab, move_tab = st.tabs(
+            (
+                "🚦 道使・申請逆算シミュレーター",
+                "🍱 ロケ弁セレクター＆発注シミュレーター",
+                "🚐 移動・香盤バッファ計算機",
+            )
+        )
+        with permit_tab:
+            render_permit_tool()
+        with bento_tab:
+            render_bento_tool()
+        with move_tab:
+            render_move_tool()
+
+
 def render_overview():
     st.markdown(
         '<div class="brand-title compact"><span class="yumi">YUMI</span><span class="cha">-CHA</span></div>',
@@ -5027,6 +5210,7 @@ def main():
     avatar_b64 = file_b64(AVATAR_PATH)
     render_sidebar()
     render_overview()
+    render_production_tools()
     render_chat(avatar_b64)
     render_sponsor(ADSENSE_SLOT_MAIN, "main")
     st.markdown('<div class="page-copy">© ALMONDBAGGER</div>', unsafe_allow_html=True)
