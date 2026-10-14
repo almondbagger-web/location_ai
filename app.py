@@ -3190,7 +3190,7 @@ QUERY_SHEET_NAME = "未解決クエリ"
 QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
 LOG_SHEET_NAME = "検索ログ"
 LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
-LOG_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwbCFfHNgTjWMtz33UpyXlI1YeO1ovSwWQur_FOsTqjoPbJAjljY8TM-KONc_iI59sOKg/exec"
+LOG_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwdXwBo7Nz6SdEbB1G5CvBhLW0gx9a-wPndjgCu17cwFHpXYVCxTqxfI0lZ-xjeEUXK/exec"
 
 
 def open_master_book():
