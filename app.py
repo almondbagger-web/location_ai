@@ -12,7 +12,11 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 import streamlit as st
 import streamlit.components.v1 as components
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 from google import genai
 from google.genai import types
 
@@ -101,7 +105,10 @@ AVATAR_PATH = BASE / "assets" / "avatar.png"
 CM_PATH = BASE / "assets" / "almondbagger_cm.mp4"
 CIRCUIT_PATH = BASE / "assets" / "circuit.svg"
 
-load_dotenv(BASE / ".env")
+try:
+    load_dotenv(BASE / ".env")
+except Exception:
+    pass
 
 # サイドバーだけ本番スロット。中央のPRは自社バナーのまま。
 ADSENSE_CLIENT = "ca-pub-3232944598825832"
@@ -3341,32 +3348,30 @@ def post_search_log(prompt: str) -> None:
 
     text = str(prompt or "").strip()
     url = str(LOG_WEBHOOK_URL or "").strip()
-    if not text or not url.startswith("http"):
+    if not text:
         return
-    payload = json.dumps(
-        {"prompt": text[:2000], "session_id": ensure_session_id()},
-        ensure_ascii=False,
-    ).encode("utf-8")
+    if not url or "ここに" in url or not url.startswith("http"):
+        print("[LOG WARNING] LOG_WEBHOOK_URL is not set properly.")
+        return
+    session_id = ensure_session_id()
 
-    def send() -> None:
+    def _post() -> None:
         try:
-            import urllib.request
+            import requests
 
-            request = urllib.request.Request(
+            response = requests.post(
                 url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
+                json={"prompt": text[:2000], "session_id": str(session_id)},
+                timeout=5,
             )
-            with urllib.request.urlopen(request, timeout=8) as response:
-                response.read()
-        except Exception:
-            return
+            print(f"[LOG SUCCESS] Status: {response.status_code}, Response: {response.text}")
+        except Exception as e:
+            print(f"[LOG ERROR] Failed to send query log: {e}")
 
     try:
-        threading.Thread(target=send, daemon=True).start()
-    except Exception:
-        return
+        threading.Thread(target=_post, daemon=True).start()
+    except Exception as e:
+        print(f"[LOG ERROR] Failed to send query log: {e}")
 
 
 def sheet_rows() -> list[dict]:
