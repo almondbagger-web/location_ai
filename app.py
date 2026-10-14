@@ -4585,6 +4585,23 @@ def apply_theme():
     }
     .tool-result strong { color: #c4161c; }
     .st-key-prod_tools [data-baseweb="tab-highlight"] { background: #c4161c !important; }
+    div[data-baseweb="input"],
+    div[data-baseweb="select"],
+    div[data-baseweb="base-input"],
+    .stTextInput input,
+    .stDateInput input,
+    .stTimeInput input,
+    .stNumberInput input,
+    .stSelectbox div {
+        background-color: #FFFFFF !important;
+        color: #111111 !important;
+        border: 1px solid #CBD5E1 !important;
+        border-radius: 8px !important;
+    }
+    input {
+        color: #111111 !important;
+        -webkit-text-fill-color: #111111 !important;
+    }
     </style>
     """
     st.markdown(css.replace("%%BG%%", background), unsafe_allow_html=True)
@@ -5009,9 +5026,134 @@ def render_chat(avatar_b64: str):
     render_composer()
 
 
+HOLIDAYS_JP = {
+    date(2026, 1, 1), date(2026, 1, 12), date(2026, 2, 11), date(2026, 2, 23),
+    date(2026, 3, 20), date(2026, 4, 29), date(2026, 5, 3), date(2026, 5, 4),
+    date(2026, 5, 5), date(2026, 5, 6), date(2026, 7, 20), date(2026, 8, 11),
+    date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23), date(2026, 10, 12),
+    date(2026, 11, 3), date(2026, 11, 23), date(2027, 1, 1), date(2027, 1, 11),
+    date(2027, 2, 11), date(2027, 2, 23), date(2027, 3, 21), date(2027, 3, 22),
+    date(2027, 4, 29), date(2027, 5, 3), date(2027, 5, 4), date(2027, 5, 5),
+}
+
+POLICE_DATA = [
+    {"area": "新宿区", "station": "四谷警察署", "days": 2},
+    {"area": "新宿区", "station": "牛込警察署", "days": 2},
+    {"area": "新宿区", "station": "新宿警察署", "days": 2},
+    {"area": "渋谷区", "station": "渋谷警察署", "days": 3},
+    {"area": "渋谷区", "station": "原宿警察署", "days": 2},
+    {"area": "渋谷区", "station": "代々木警察署", "days": 2},
+    {"area": "港区", "station": "赤坂警察署", "days": 2},
+    {"area": "港区", "station": "三田警察署", "days": 1},
+    {"area": "港区", "station": "愛宕警察署", "days": 1},
+    {"area": "港区", "station": "高輪警察署", "days": 1},
+    {"area": "港区", "station": "麻布警察署", "days": 2},
+    {"area": "中央区", "station": "月島警察署", "days": 2},
+    {"area": "中央区", "station": "久松警察署", "days": 1},
+    {"area": "中央区", "station": "築地警察署", "days": 2},
+    {"area": "中央区", "station": "中央警察署", "days": 2},
+    {"area": "江東区", "station": "城東警察署", "days": 1},
+    {"area": "江東区", "station": "深川警察署", "days": 2},
+    {"area": "江東区", "station": "東京湾岸警察署", "days": 1},
+    {"area": "江戸川区", "station": "葛西警察署", "days": 2},
+    {"area": "江戸川区", "station": "小岩警察署", "days": 2},
+    {"area": "江戸川区", "station": "小松川警察署", "days": 2},
+    {"area": "千代田区", "station": "麹町警察署", "days": 1},
+    {"area": "千代田区", "station": "神田警察署", "days": 1},
+    {"area": "千代田区", "station": "丸の内警察署", "days": 2},
+    {"area": "千代田区", "station": "万世橋警察署", "days": 2},
+    {"area": "文京区", "station": "大塚警察署", "days": 2},
+    {"area": "文京区", "station": "富坂警察署", "days": 2},
+    {"area": "文京区", "station": "駒込警察署", "days": 3},
+    {"area": "文京区", "station": "本富士警察署", "days": 2},
+    {"area": "品川区", "station": "品川警察署", "days": 2},
+    {"area": "品川区", "station": "荏原警察署", "days": 2},
+    {"area": "品川区", "station": "大井警察署", "days": 1},
+    {"area": "品川区", "station": "大崎警察署", "days": 1},
+    {"area": "目黒区", "station": "目黒警察署", "days": 2},
+    {"area": "目黒区", "station": "碑文谷警察署", "days": 2},
+    {"area": "板橋区", "station": "志村警察署", "days": 1},
+    {"area": "板橋区", "station": "板橋警察署", "days": 2},
+    {"area": "板橋区", "station": "高島平警察署", "days": 2},
+    {"area": "足立区", "station": "綾瀬警察署", "days": 2},
+    {"area": "足立区", "station": "西新井警察署", "days": 2},
+    {"area": "足立区", "station": "竹ノ塚警察署", "days": 2},
+    {"area": "足立区", "station": "千住警察署", "days": 1},
+    {"area": "荒川区", "station": "荒川警察署", "days": 2},
+    {"area": "荒川区", "station": "尾久警察署", "days": 2},
+    {"area": "荒川区", "station": "南千住警察署", "days": 2},
+    {"area": "大田区", "station": "大森警察署", "days": 1},
+    {"area": "大田区", "station": "蒲田警察署", "days": 2},
+    {"area": "大田区", "station": "田園調布警察署", "days": 1},
+    {"area": "大田区", "station": "東京空港警察署", "days": 2},
+    {"area": "大田区", "station": "池上警察署", "days": 1},
+    {"area": "葛飾区", "station": "葛飾警察署", "days": 2},
+    {"area": "葛飾区", "station": "亀有警察署", "days": 1},
+    {"area": "北区", "station": "王子警察署", "days": 2},
+    {"area": "北区", "station": "赤羽警察署", "days": 2},
+    {"area": "北区", "station": "滝野川警察署", "days": 4},
+    {"area": "杉並区", "station": "杉並警察署", "days": 1},
+    {"area": "杉並区", "station": "高井戸警察署", "days": 1},
+    {"area": "杉並区", "station": "荻窪警察署", "days": 2},
+    {"area": "墨田区", "station": "向島警察署", "days": 2},
+    {"area": "墨田区", "station": "本所警察署", "days": 2},
+    {"area": "世田谷区", "station": "世田谷警察署", "days": 1},
+    {"area": "世田谷区", "station": "玉川警察署", "days": 1},
+    {"area": "世田谷区", "station": "成城警察署", "days": 2},
+    {"area": "世田谷区", "station": "北沢警察署", "days": 1},
+    {"area": "台東区", "station": "浅草警察署", "days": 2},
+    {"area": "台東区", "station": "蔵前警察署", "days": 1},
+    {"area": "台東区", "station": "下谷警察署", "days": 2},
+    {"area": "台東区", "station": "上野警察署", "days": 2},
+    {"area": "豊島区", "station": "巣鴨警察署", "days": 2},
+    {"area": "豊島区", "station": "池袋警察署", "days": 1},
+    {"area": "豊島区", "station": "目白警察署", "days": 2},
+    {"area": "中野区", "station": "中野警察署", "days": 2},
+    {"area": "中野区", "station": "野方警察署", "days": 2},
+    {"area": "練馬区", "station": "石神井警察署", "days": 2},
+    {"area": "練馬区", "station": "練馬警察署", "days": 2},
+    {"area": "練馬区", "station": "光が丘警察署", "days": 1},
+    {"area": "八王子市", "station": "高尾警察署", "days": 1},
+    {"area": "八王子市", "station": "八王子警察署", "days": 1},
+    {"area": "八王子市", "station": "南大沢警察署", "days": 1},
+    {"area": "立川市", "station": "立川警察署", "days": 2},
+    {"area": "武蔵野市", "station": "武蔵野警察署", "days": 2},
+    {"area": "三鷹市", "station": "三鷹警察署", "days": 2},
+    {"area": "青梅市", "station": "青梅警察署", "days": 2},
+    {"area": "府中市", "station": "府中警察署", "days": 2},
+    {"area": "昭島市", "station": "昭島警察署", "days": 1},
+    {"area": "調布市", "station": "調布警察署", "days": 2},
+    {"area": "町田市", "station": "町田警察署", "days": 1},
+    {"area": "小金井市", "station": "小金井警察署", "days": 2},
+    {"area": "小平市", "station": "小平警察署", "days": 2},
+    {"area": "日野市", "station": "日野警察署", "days": 1},
+    {"area": "東村山市", "station": "東村山警察署", "days": 2},
+    {"area": "福生市", "station": "福生警察署", "days": 2},
+    {"area": "東大和市", "station": "東大和警察署", "days": 3},
+    {"area": "多摩市", "station": "多摩中央警察署", "days": 2},
+    {"area": "あきる野市", "station": "五日市警察署", "days": 2},
+    {"area": "西東京市", "station": "田無警察署", "days": 1},
+]
+
+PARK_DATA = {
+    "港区": {"窓口": "複数（各総合支所）", "可能時間": "9時〜21時（応相談）", "夜間": "〇（21時まで）", "料金": "動画: 53,100円/1h", "NG条件": "セット・小道具放置、地面直置き、三脚2台以上NG"},
+    "中央区": {"窓口": "管理調整課占用係: 03-3546-5416", "可能時間": "日の出〜日没（1時間以内＋前後30分）", "夜間": "×", "料金": "一律: 36,896円", "NG条件": "セット・レール・三脚使用、隣接民家撮影。月島/勝どき/浜町等は撮影禁止"},
+    "千代田区": {"窓口": "環境まちづくり総務課占用係: 03-5211-4235", "可能時間": "日の出〜日没（応相談）", "夜間": "×", "料金": "動画: 44,080円/1h", "NG条件": "レール・三脚・凶器危険物・火気・車両乗入NG"},
+    "世田谷区": {"窓口": "みどり33推進担当部 公園緑地課: 03-6432-7907", "可能時間": "平日 9時〜17時", "夜間": "×", "料金": "動画: 16,875円/1h", "NG条件": "車両乗入、クレーン、レール、火気、駐車場/トイレ撮影NG"},
+    "渋谷区": {"窓口": "公園課公園維持係: 03-3463-2876", "可能時間": "9時〜21時（応相談・3時間まで）", "夜間": "〇", "料金": "動画: 42,000円/1h", "NG条件": "暴力・銃器シーン、人力運搬できない機材、火気NG"},
+    "新宿区": {"窓口": "みどり公園課: 03-5273-3914", "可能時間": "日の出〜日没（新宿中央公園等は22時まで夜間可）", "夜間": "〇（特定公園のみ）", "料金": "動画: 29,020円/1h", "NG条件": "セット組・クレーン・レール・武器・火気NG"},
+    "台東区": {"窓口": "台東区FC: 03-5246-1434", "可能時間": "応相談（墨田公園なら朝まで夜間撮影可能）", "夜間": "〇", "料金": "動画: 18,900円/1h", "NG条件": "火気・球技・植物加工NG"},
+    "江東区": {"窓口": "河川公園課工務係: 03-3647-2538", "可能時間": "平日 9時〜12時（2時間まで）", "夜間": "×", "料金": "動画: 18,900円/1h", "NG条件": "暴力・過度な恋愛・レール・クレーン・火気NG"},
+    "品川区": {"窓口": "公園課公園維持担当: 03-5742-6789", "可能時間": "公園による（応相談）", "夜間": "応相談", "料金": "動画: 16,875円/1h", "NG条件": "火気・刃物・暴力・過激な性表現・車両乗入NG"},
+    "大田区": {"窓口": "公園課: 03-6715-1824", "可能時間": "平日 8:30〜17:00", "夜間": "×", "料金": "公園毎", "NG条件": "ドローン・水泳場内NG"},
+}
+
+
 def is_jp_business_day(day: date) -> bool:
-    if day.weekday() >= 5:
+    if day.weekday() >= 5 or day in HOLIDAYS_JP:
         return False
+    if day.year in (2026, 2027):
+        return True
     if jp_holidays is None:
         return True
     try:
@@ -5076,17 +5218,25 @@ def spare_count(heads: int) -> int:
 
 
 def render_permit_tool():
+    areas = list(dict.fromkeys(row["area"] for row in POLICE_DATA))
+    area = st.selectbox("所轄のエリア", areas, key="permit_area")
+    stations = [row for row in POLICE_DATA if row["area"] == area]
+    station_name = st.selectbox("警察署", [row["station"] for row in stations], key=f"permit_station_{area}")
+    station = next(row for row in stations if row["station"] == station_name)
     shoot = st.date_input("撮影予定日", value=date.today() + timedelta(days=21), key="permit_shoot")
     latest = subtract_business_days(shoot, 7)
     safer = subtract_business_days(shoot, 10)
+    local_limit = subtract_business_days(shoot, 7 + int(station["days"]))
     greet = previous_business_day(shoot - timedelta(days=3))
     street = previous_business_day(shoot - timedelta(days=7))
     holiday_note = ""
-    if jp_holidays is None:
-        holiday_note = "<p>祝日データが無いため、土日だけを除いて実働日を数えています。</p>"
+    if shoot.year not in (2026, 2027) and jp_holidays is None:
+        holiday_note = "<p>2026年と2027年以外は、土日だけを除いて実働日を数えています。</p>"
     st.markdown(
         "<div class='tool-result'>"
+        f"<p>{html.escape(station_name)}（台帳の目安 {int(station['days'])}日）</p>"
         f"<p>最終提出リミット（中7実働日） <strong>{html.escape(format_jp_date(latest))}</strong></p>"
+        f"<p>この署を足した提出目安 <strong>{html.escape(format_jp_date(local_limit))}</strong></p>"
         f"<p>余裕を見る提出日（中10実働日） <strong>{html.escape(format_jp_date(safer))}</strong></p>"
         "<p>推奨の提出時間は 13:30〜14:00。昼明け直後で、窓口の混雑を避けます。</p>"
         "<p>作業帯図はミリ単位。車線、カラーコーン、誘導員の立ち位置まで図面に落とします。</p>"
@@ -5096,6 +5246,21 @@ def render_permit_tool():
         "</div>",
         unsafe_allow_html=True,
     )
+    with st.expander(f"{area}の警察署一覧"):
+        for row in stations:
+            st.markdown(f"- {row['station']}　目安 {int(row['days'])}日")
+    park = PARK_DATA.get(area)
+    with st.expander(f"{area}の公園撮影許可"):
+        if not park:
+            st.markdown("このエリアの公園許可は、台帳にまだありません。")
+        else:
+            st.markdown(
+                f"- 窓口: {park['窓口']}\n"
+                f"- 可能時間: {park['可能時間']}\n"
+                f"- 夜間: {park['夜間']}\n"
+                f"- 料金: {park['料金']}\n"
+                f"- NG条件: {park['NG条件']}"
+            )
 
 
 def render_bento_tool():
