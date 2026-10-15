@@ -8,4 +8,5 @@ requests
 beautifulsoup4
 google-genai
 holidays
-holidays
+openpyxl
+pypdf
