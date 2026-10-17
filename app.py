@@ -4412,7 +4412,7 @@ def apply_theme():
     }
     .st-key-suggest {
         z-index: 29;
-        bottom: 96px;
+        bottom: 126px;
         width: min(760px, calc(100vw - 40px));
     }
     .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-suggest,
