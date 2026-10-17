@@ -325,10 +325,16 @@ def rich_text_chunks(text):
 
 
 def register_notion(item):
-    api_key = os.getenv("NOTION_API_KEY", "").strip()
-    database_id = os.getenv("NOTION_DATABASE_ID", "").strip()
+    try:
+        import streamlit as st
+
+        api_key = str(st.secrets.get("NOTION_API_KEY", "") or "").strip()
+        database_id = str(st.secrets.get("NOTION_DATABASE_ID", "") or "").strip()
+    except Exception:
+        api_key = ""
+        database_id = ""
     if not api_key or not database_id:
-        raise RuntimeError("NOTION_API_KEY または NOTION_DATABASE_ID が .env にありません。")
+        raise RuntimeError("NOTION_API_KEY または NOTION_DATABASE_ID が st.secrets にありません。")
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Notion-Version": NOTION_VERSION,
