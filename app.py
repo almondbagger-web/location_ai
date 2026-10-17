@@ -120,6 +120,10 @@ def scene_search_terms(query: str) -> list[str]:
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = BASE / "locations_master.db"
+try:
+    import csv_location_index
+except Exception:
+    csv_location_index = None
 LOGO_PATH = BASE / "logo.png"
 AVATAR_PATH = BASE / "assets" / "avatar.png"
 CM_PATH = BASE / "assets" / "almondbagger_cm.mp4"
@@ -2194,6 +2198,27 @@ def place_brief(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def csv_location_cue(user_text: str) -> str:
+    try:
+        if csv_location_index is None:
+            return ""
+        raw = user_text or ""
+        if is_bento_query(raw) or is_desk_query(raw) or is_founder_query(raw) or is_greeting(raw):
+            return ""
+        kind = ""
+        try:
+            kind = classify_craft(raw)
+        except Exception:
+            kind = ""
+        if kind in {"permit", "vehicle", "timeline", "money", "prep", "camp", "callsheet", "mindset", "liaison", "greeting", "field"}:
+            return ""
+        if not (is_location_query(raw) or is_scene_search(raw) or is_detail_question(raw)):
+            return ""
+        return csv_location_index.reference_block(raw) or ""
+    except Exception:
+        return ""
+
+
 def ask_gemini(
     user_text: str,
     messages: list[dict],
@@ -2215,6 +2240,13 @@ def ask_gemini(
         )
     elif not task:
         task = "実データの一覧は渡していない。施設名や店名を作って候補として出さない。相談、挨拶、文章作成には直接答える。"
+    shown = facts or "（なし）"
+    try:
+        cue = csv_location_cue(user_text)
+    except Exception:
+        cue = ""
+    if cue:
+        shown = cue if shown == "（なし）" else f"{shown}\n\n{cue}"
     prompt = f"""
 {task}
 
@@ -2225,7 +2257,7 @@ def ask_gemini(
 {user_text}
 
 【実データ】
-{facts or "（なし）"}
+{shown}
 """
     client = None
     try:
@@ -3044,6 +3076,12 @@ def ask_gemini_timed(user_text: str, messages: list[dict] | None, task: str, sec
     models = model_chain()
     prior = history_block(messages or [])
     prompt = f"{task}\n\n【これまでの会話】\n{prior or '（なし）'}\n\n【質問】\n{user_text}\n"
+    try:
+        cue = csv_location_cue(user_text)
+    except Exception:
+        cue = ""
+    if cue:
+        prompt = f"{prompt}\n{cue}\n"
     box: dict[str, str] = {}
 
     def run() -> None:
