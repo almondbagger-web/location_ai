@@ -3368,21 +3368,17 @@ def ensure_session_id() -> str:
 
 
 def notion_api_key() -> str:
-    secret = ""
     try:
-        secret = st.secrets.get("NOTION_API_KEY") or ""
+        return str(st.secrets.get("NOTION_API_KEY", "") or "").strip()
     except Exception:
-        secret = ""
-    return str(secret or os.environ.get("NOTION_API_KEY") or "").strip()
+        return ""
 
 
 def notion_database_id() -> str:
-    secret = ""
     try:
-        secret = st.secrets.get("NOTION_DATABASE_ID", "3f9cc5c0068a8018a9a9eeebcf629313") or ""
+        return str(st.secrets.get("NOTION_DATABASE_ID", "") or "").strip()
     except Exception:
-        secret = ""
-    return str(secret or os.environ.get("NOTION_DATABASE_ID") or "3f9cc5c0068a8018a9a9eeebcf629313").strip()
+        return ""
 
 
 def notion_headers() -> dict[str, str]:
