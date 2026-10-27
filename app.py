@@ -5269,30 +5269,43 @@ def render_permit_tool():
 
 
 SCENE_COLUMNS = (
-    "話",
-    "S#",
-    "D/N",
-    "シーン名",
-    "出来事・ト書き",
-    "撮影場所（想定箇所）",
-    "特記事項・備考",
+    "話数",
+    "シーン番号",
+    "柱（ロケ場所）",
+    "屋内外判定",
+    "時間帯",
+    "天候指定",
+    "登場人物（キャスト）",
+    "制作部特記事項・メモ",
 )
-SCENE_WIDTHS = (8, 10, 8, 24, 48, 36, 32)
+SCENE_WIDTHS = (12, 12, 36, 12, 10, 10, 28, 42)
+SCENE_FILE_LIMIT = 15
 SCENE_EXTRACT_INSTRUCTION = """
-台本の抜粋から、撮影場所を検討するためのシーン表を作る。
+台本の抜粋から、香盤に使うシーン表を作る。
 出力はJSON配列だけ。説明、前置き、コードフェンスは書かない。
-各要素のキーは episode, scene_no, dn, scene_name, action, place, note。
-- episode: 話数。台本に無ければ空文字。
+各要素のキーは episode, scene_no, place, interior, time_band, weather, cast, note。
+- episode: 第1話 の形。台本に無ければ空文字。
 - scene_no: 台本のシーン番号。S# が無ければ S#1 の形にする。
-- dn: D、N、M のいずれか。不明なら空文字。
-- scene_name: その場の呼び名。セリフは書かない。
-- action: 出来事の要約。セリフの引用は禁止。40字以内。
-- place: 想定される撮影場所の種別。個人の自宅住所、部屋番号は書かない。
-- note: 道路使用許可、車両、美術、特殊機材が必要そうな点だけ。不要なら空文字。
+- place: 柱。その場の呼び名。住所、部屋番号、表札は書かない。
+- interior: 屋内、屋外、M のいずれか。不明なら空文字。
+- time_band: D、N、夕、早朝 のいずれか。不明なら空文字。
+- weather: 晴、雨、曇、荒天 のいずれか。指定が無ければ空文字。
+- cast: 登場人物をカンマで並べる。セリフは書かない。
+- note: ロケかセットか、消え物、特機、車両、通行人エキストラ、道路使用許可の要否。不要なら空文字。
 台本に無いシーンは作らない。作品名は表に入れない。
 形式の例（架空）:
-[{"episode":"1","scene_no":"S#1","dn":"D","scene_name":"カフェ","action":"主人公の会話","place":"都内カフェ想定","note":""}]
+[{"episode":"第1話","scene_no":"S#1","place":"都内カフェ","interior":"屋内","time_band":"D","weather":"晴","cast":"主人公","note":""}]
 """
+EPISODE_DIGIT = str.maketrans("０１２３４５６７８９", "0123456789")
+SCENE_FLAG_RULES = (
+    ("道路使用許可", r"道路|交差点|公道|横断歩道|車道|通行止め"),
+    ("車両", r"車|車両|バイク|タクシー|バス|トラック"),
+    ("特機", r"ドローン|クレーン|特機|ステディ|ジブ|レール"),
+    ("消え物", r"消え物|食事|喫煙|飲酒|酒|血糊"),
+    ("通行人エキストラ", r"通行人|エキストラ|モブ|群集|ギャラリー"),
+    ("セット", r"セット|スタジオ|屋内|室内"),
+    ("ロケ", r"ロケ|屋外|交差点|公園|駅前|商店街"),
+)
 
 
 def scene_sheet_bytes(rows: list[dict] | None = None) -> bytes:
@@ -5397,6 +5410,119 @@ def read_script_upload(uploaded) -> tuple[str, str]:
     return decode_script_bytes(data).strip(), ""
 
 
+def episode_hint(filename: str) -> tuple[int, int, str]:
+    stem = Path(str(filename or "")).stem.translate(EPISODE_DIGIT)
+    stem = stem.replace("＃", "#")
+    numbered = (
+        re.search(r"第\s*(\d{1,2})\s*話", stem),
+        re.search(r"(?:^|[^0-9])(\d{1,2})\s*話", stem),
+        re.search(r"#\s*(\d{1,2})(?!\d)", stem),
+        re.search(r"ep(?:isode)?[\s._-]*0*(\d{1,2})(?!\d)", stem, re.I),
+    )
+    for found in numbered:
+        if not found:
+            continue
+        number = int(found.group(1))
+        if 1 <= number <= 99:
+            return 0, number, f"第{number}話"
+    if re.search(r"特番|特別編|スペシャル|(?:^|[^A-Za-z])SP(?:[^A-Za-z]|$)", stem, re.I):
+        extra = re.search(r"(\d{1,2})", stem)
+        if extra:
+            number = int(extra.group(1))
+            return 1, number, f"特番{number}"
+        return 1, 0, "特番"
+    return 2, 0, ""
+
+
+def order_script_uploads(files) -> list[dict]:
+    prepared = []
+    for index, uploaded in enumerate(list(files or [])):
+        group, number, label = episode_hint(getattr(uploaded, "name", "") or "")
+        prepared.append({
+            "file": uploaded,
+            "group": group,
+            "number": number,
+            "label": label,
+            "index": index,
+        })
+    prepared.sort(key=lambda item: (item["group"], item["number"], item["index"]))
+    used = {item["number"] for item in prepared if item["group"] == 0}
+    next_no = max(used, default=0) + 1
+    specials = 0
+    for item in prepared:
+        if item["label"]:
+            if item["label"] == "特番":
+                specials += 1
+                if specials > 1:
+                    item["label"] = f"特番{specials}"
+            continue
+        item["label"] = f"第{next_no}話"
+        next_no += 1
+    return prepared[:SCENE_FILE_LIMIT]
+
+
+def normalize_interior(value: str) -> str:
+    raw = value.translate(EPISODE_DIGIT).upper()
+    if re.search(r"屋外|EXT|室外|外", raw) and re.search(r"屋内|INT|室内", raw):
+        return "M"
+    if raw in {"M", "Ｍ"} or "屋内外" in value:
+        return "M"
+    if re.search(r"屋外|EXT|室外", raw):
+        return "屋外"
+    if re.search(r"屋内|INT|室内", raw):
+        return "屋内"
+    return ""
+
+
+def normalize_time_band(value: str) -> str:
+    raw = value.translate(EPISODE_DIGIT).upper()
+    if re.search(r"早朝|未明|MORNING", raw):
+        return "早朝"
+    if re.search(r"夕|EVENING|DUSK", raw):
+        return "夕"
+    if re.search(r"(^|[^A-Z])N([^A-Z]|$)|夜|NIGHT", raw):
+        return "N"
+    if re.search(r"(^|[^A-Z])D([^A-Z]|$)|昼|DAY", raw):
+        return "D"
+    return ""
+
+
+def normalize_weather(value: str) -> str:
+    if re.search(r"荒天|嵐|豪雨|吹雪", value):
+        return "荒天"
+    if "雨" in value or re.search(r"RAIN", value, re.I):
+        return "雨"
+    if "曇" in value:
+        return "曇"
+    if "晴" in value:
+        return "晴"
+    return ""
+
+
+def normalize_cast(value: str) -> str:
+    names = [part.strip() for part in re.split(r"[,、/／・]", value) if part.strip()]
+    unique = []
+    for name in names:
+        if name not in unique:
+            unique.append(name[:24])
+        if len(unique) >= 12:
+            break
+    return ", ".join(unique)
+
+
+def apply_scene_flags(row: dict) -> None:
+    blob = " ".join(str(row.get(column) or "") for column in ("柱（ロケ場所）", "屋内外判定", "制作部特記事項・メモ"))
+    note = str(row.get("制作部特記事項・メモ") or "")
+    flags = []
+    for label, pattern in SCENE_FLAG_RULES:
+        if label in note or label in flags:
+            continue
+        if re.search(pattern, blob):
+            flags.append(label)
+    if flags:
+        row["制作部特記事項・メモ"] = " / ".join(part for part in [note, " ".join(flags)] if part).strip()
+
+
 def scene_rows_from_payload(payload) -> list[dict]:
     if isinstance(payload, dict):
         for key in ("scenes", "rows", "items"):
@@ -5408,13 +5534,14 @@ def scene_rows_from_payload(payload) -> list[dict]:
     if not isinstance(payload, list):
         return []
     aliases = {
-        "話": ("episode", "話", "episode_no"),
-        "S#": ("scene_no", "scene", "S#", "s_no"),
-        "D/N": ("dn", "DN", "D/N", "day_night"),
-        "シーン名": ("scene_name", "シーン名", "name"),
-        "出来事・ト書き": ("action", "出来事", "summary"),
-        "撮影場所（想定箇所）": ("place", "撮影場所", "location"),
-        "特記事項・備考": ("note", "備考", "notes"),
+        "話数": ("episode", "話数", "話", "episode_no"),
+        "シーン番号": ("scene_no", "シーン番号", "S#", "scene", "s_no"),
+        "柱（ロケ場所）": ("place", "柱", "撮影場所", "location", "scene_name", "シーン名"),
+        "屋内外判定": ("interior", "屋内外", "in_out"),
+        "時間帯": ("time_band", "時間帯", "dn", "DN", "D/N", "day_night"),
+        "天候指定": ("weather", "天候", "天候指定"),
+        "登場人物（キャスト）": ("cast", "登場人物", "キャスト"),
+        "制作部特記事項・メモ": ("note", "特記事項", "備考", "notes"),
     }
     rows = []
     for item in payload:
@@ -5427,19 +5554,28 @@ def scene_rows_from_payload(payload) -> list[dict]:
                 if item.get(key) not in (None, ""):
                     value = str(item.get(key)).strip()
                     break
-            value = re.sub(r"[「『][^」』]*[」』]", "", value)
+            if column == "登場人物（キャスト）":
+                value = re.sub(r"[「『」』]", "", value)
+            else:
+                value = re.sub(r"[「『][^」』]*[」』]", "", value)
             value = re.sub(r"\s+", " ", value).strip()
-            if column == "出来事・ト書き":
-                value = value[:40]
-            if column == "撮影場所（想定箇所）" and re.search(r"号室|表札|個人宅|自宅", value):
+            if column == "柱（ロケ場所）" and re.search(r"号室|表札|個人宅|番地|[0-9０-９]+丁目", value):
                 value = "要確認"
-            if column == "D/N":
-                value = value.upper().replace("Ｄ", "D").replace("Ｎ", "N").replace("Ｍ", "M")
-                value = value if value in {"D", "N", "M", "DN"} else value[:3]
-            if column == "S#" and value and not value.upper().startswith("S"):
+            if column == "屋内外判定":
+                value = normalize_interior(value)
+            if column == "時間帯":
+                value = normalize_time_band(value)
+            if column == "天候指定":
+                value = normalize_weather(value)
+            if column == "登場人物（キャスト）":
+                value = normalize_cast(value)
+            if column == "シーン番号" and value and not value.upper().startswith("S"):
                 value = f"S#{value.lstrip('#')}"
+            if column == "制作部特記事項・メモ":
+                value = value[:160]
             row[column] = value
-        if any(row.get(column) for column in ("S#", "シーン名", "出来事・ト書き", "撮影場所（想定箇所）")):
+        apply_scene_flags(row)
+        if any(row.get(column) for column in ("シーン番号", "柱（ロケ場所）", "登場人物（キャスト）")):
             rows.append(row)
         if len(rows) >= 200:
             break
@@ -5529,7 +5665,7 @@ def scenes_from_script(text: str) -> tuple[list[dict], bool]:
     seen = set()
     for chunk in chunks:
         for row in ask_scene_json(chunk):
-            key = (row.get("話"), row.get("S#"), row.get("シーン名"), row.get("出来事・ト書き"))
+            key = (row.get("話数"), row.get("シーン番号"), row.get("柱（ロケ場所）"))
             if key in seen:
                 continue
             seen.add(key)
@@ -5539,8 +5675,230 @@ def scenes_from_script(text: str) -> tuple[list[dict], bool]:
     return rows, len(cleaned) > size * limit
 
 
+def stamp_episode(rows: list[dict], label: str) -> list[dict]:
+    for row in rows:
+        row["話数"] = label
+    return rows
+
+
+def extract_one_script(text: str) -> tuple[list[dict], bool]:
+    last = ([], False)
+    for _attempt in range(2):
+        try:
+            rows, truncated = scenes_from_script(text)
+        except Exception:
+            continue
+        if rows:
+            return rows, truncated
+        last = (rows, truncated)
+    return last
+
+
+def advance_scene_progress(bar, status, ratio: float, message: str) -> None:
+    try:
+        bar.progress(min(1.0, max(0.0, ratio)), text=message)
+    except TypeError:
+        try:
+            bar.progress(min(1.0, max(0.0, ratio)))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        status.update(label=message)
+    except Exception:
+        pass
+
+
+def excel_sheet_title(name: str, used: set[str]) -> str:
+    cleaned = re.sub(r"[:\\/?*\[\]]", "", str(name or "")).strip() or "話"
+    cleaned = cleaned[:31]
+    candidate = cleaned
+    number = 2
+    while candidate in used:
+        suffix = f"_{number}"
+        candidate = f"{cleaned[:31 - len(suffix)]}{suffix}"
+        number += 1
+    used.add(candidate)
+    return candidate
+
+
+def write_scene_table(sheet, columns: tuple[str, ...], rows: list[dict], widths: tuple[int, ...]) -> None:
+    header_font = Font(name="游ゴシック", size=11, bold=True, color="FFFFFFFF")
+    body_font = Font(name="游ゴシック", size=11, color="FF111111")
+    header_fill = PatternFill("solid", fgColor="FF1F2937")
+    thin = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    sheet.row_dimensions[1].height = 22
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{max(1, len(rows) + 1)}"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    for index, name in enumerate(columns, start=1):
+        cell = sheet.cell(1, index, name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+        cell.border = thin
+    for offset, record in enumerate(rows):
+        excel_row = offset + 2
+        sheet.row_dimensions[excel_row].height = 30
+        for index, name in enumerate(columns, start=1):
+            value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(record.get(name) or ""))
+            cell = sheet.cell(excel_row, index, value)
+            cell.font = body_font
+            cell.border = thin
+            cell.alignment = center if name in {"通し", "話数", "シーン番号", "屋内外判定", "時間帯", "天候指定", "シーン数"} else left
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+
+def place_summary_rows(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        place = str(row.get("柱（ロケ場所）") or "").strip() or "要確認"
+        bucket = grouped.setdefault(place, {"episodes": [], "scenes": []})
+        episode = str(row.get("話数") or "")
+        scene_no = str(row.get("シーン番号") or "")
+        if episode and episode not in bucket["episodes"]:
+            bucket["episodes"].append(episode)
+        label = " ".join(part for part in (episode, scene_no) if part)
+        if label:
+            bucket["scenes"].append(label)
+    summary = []
+    for place, bucket in grouped.items():
+        summary.append({
+            "柱（ロケ場所）": place,
+            "シーン数": len(bucket["scenes"]) or 1,
+            "使用話数": ", ".join(bucket["episodes"]),
+            "該当シーン": " / ".join(bucket["scenes"]),
+        })
+    summary.sort(key=lambda item: (-int(item["シーン数"]), str(item["柱（ロケ場所）"])))
+    return summary
+
+
+def scene_batch_workbook(rows: list[dict]) -> bytes:
+    book = Workbook()
+    master_columns = ("通し",) + SCENE_COLUMNS
+    master_widths = (8,) + SCENE_WIDTHS
+    master_rows = []
+    for index, row in enumerate(rows, start=1):
+        packed = {"通し": index}
+        packed.update(row)
+        master_rows.append(packed)
+    master = book.active
+    master.title = "全話統合マスター"
+    write_scene_table(master, master_columns, master_rows, master_widths)
+    used = {"全話統合マスター"}
+    episodes = []
+    for row in rows:
+        label = str(row.get("話数") or "話")
+        if label not in episodes:
+            episodes.append(label)
+    for label in episodes:
+        sheet = book.create_sheet(excel_sheet_title(label, used))
+        episode_rows = [row for row in rows if str(row.get("話数") or "話") == label]
+        write_scene_table(sheet, SCENE_COLUMNS, episode_rows, SCENE_WIDTHS)
+    summary = book.create_sheet(excel_sheet_title("ロケ場所・セット別集計", used))
+    write_scene_table(
+        summary,
+        ("柱（ロケ場所）", "シーン数", "使用話数", "該当シーン"),
+        place_summary_rows(rows),
+        (36, 12, 28, 60),
+    )
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def merge_scene_frames(frames: list) -> list[dict]:
+    try:
+        import pandas as pd
+    except Exception:
+        pd = None
+    if pd is None:
+        merged = []
+        for frame in frames:
+            merged.extend(list(frame))
+        return merged
+    tables = []
+    for frame in frames:
+        tables.append(pd.DataFrame(frame, columns=list(SCENE_COLUMNS)))
+    if not tables:
+        return []
+    combined = pd.concat(tables, ignore_index=True)
+    return combined.to_dict("records")
+
+
+def script_batch_token(files) -> str:
+    parts = []
+    for uploaded in list(files or [])[:SCENE_FILE_LIMIT]:
+        parts.append(f"{getattr(uploaded, 'name', '')}:{getattr(uploaded, 'size', 0)}")
+    return "|".join(parts)
+
+
+def analyze_script_batch(files) -> tuple[list[dict], list[str], bool]:
+    ordered = order_script_uploads(files)
+    total = len(ordered)
+    if total < 1:
+        return [], [], False
+    frames = []
+    notices = []
+    truncated = False
+    found = 0
+    opening = f"進捗: [ 0 / {total} 話 ] 準備中"
+    try:
+        progress = st.progress(0, text=opening)
+    except TypeError:
+        progress = st.progress(0)
+    with st.status(opening, expanded=True) as status:
+        for index, item in enumerate(ordered, start=1):
+            label = item["label"]
+            message = f"進捗: [ {index} / {total} 話 ] {label}を解析中（検出シーン数: {found}件）..."
+            advance_scene_progress(progress, status, (index - 1) / total, message)
+            try:
+                script, error = read_script_upload(item["file"])
+            except Exception:
+                script, error = "", "読み取れませんでした。"
+            if error or not script:
+                notices.append(f"{label}の解析でスキップしました。再試行するときは、この話だけを入れ直してください。")
+                advance_scene_progress(progress, status, index / total, f"進捗: [ {index} / {total} 話 ] {label}をスキップ（検出シーン数: {found}件）")
+                continue
+            try:
+                rows, file_truncated = extract_one_script(script)
+            except Exception:
+                rows, file_truncated = [], False
+            truncated = truncated or file_truncated
+            if not rows:
+                notices.append(f"{label}の解析でスキップしました。再試行するときは、この話だけを入れ直してください。")
+            else:
+                frames.append(stamp_episode(rows, label))
+                found += len(rows)
+            advance_scene_progress(
+                progress,
+                status,
+                index / total,
+                f"進捗: [ {index} / {total} 話 ] {label}まで完了（検出シーン数: {found}件）",
+            )
+        try:
+            status.update(label=f"進捗: [ {total} / {total} 話 ] 完了（検出シーン数: {found}件）", state="complete")
+        except Exception:
+            pass
+    return merge_scene_frames(frames), notices, truncated
+
+
 def render_scene_sheet_tool():
     st.caption("台本の本文やセリフは表に残さず、場所と出来事の要約だけを出します。")
+    st.caption("第1話から第12話、特番まで一度に入れられます。解析は1話ずつ行います。")
     if Workbook is None:
         st.caption("表の書き出し準備がありません。")
     else:
@@ -5554,29 +5912,34 @@ def render_scene_sheet_tool():
     uploaded = st.file_uploader(
         "台本（PDFまたはテキスト）",
         type=["pdf", "txt"],
+        accept_multiple_files=True,
         key="scene_script_upload",
     )
-    if uploaded is not None and st.button("シーンを抽出", key="scene_extract"):
-        with st.spinner("台本を読み、シーン表にしています"):
-            script, error = read_script_upload(uploaded)
-            rows, truncated = scenes_from_script(script) if script else ([], False)
+    files = list(uploaded or [])
+    if len(files) > SCENE_FILE_LIMIT:
+        st.caption("一度に解析するのは15ファイルまでです。話数の若い順に15本を使います。")
+    if files and st.button("シーンを抽出", key="scene_extract"):
+        rows, notices, truncated = analyze_script_batch(files)
         st.session_state.scene_sheet_rows = rows
-        st.session_state.scene_sheet_token = f"{uploaded.name}:{getattr(uploaded, 'size', 0)}"
+        st.session_state.scene_sheet_token = script_batch_token(files)
         st.session_state.scene_sheet_truncated = truncated
-        st.session_state.scene_sheet_error = error or ("" if rows else "シーンを取り出せませんでした。")
-    token = ""
-    if uploaded is not None:
-        token = f"{uploaded.name}:{getattr(uploaded, 'size', 0)}"
+        st.session_state.scene_sheet_notices = notices
+        st.session_state.scene_sheet_error = "" if rows else "シーンを取り出せませんでした。"
+    token = script_batch_token(files)
     if token and token == st.session_state.get("scene_sheet_token"):
         rows = list(st.session_state.get("scene_sheet_rows") or [])
+        notices = list(st.session_state.get("scene_sheet_notices") or [])
     else:
         rows = []
+        notices = []
     error = st.session_state.get("scene_sheet_error") or ""
     if error and not rows and token == st.session_state.get("scene_sheet_token"):
         st.markdown(
             f"<p style='color:#c4161c;font-weight:700;margin:8px 0 0;'>{html.escape(error)}</p>",
             unsafe_allow_html=True,
         )
+    for notice in notices:
+        st.caption(notice)
     if st.session_state.get("scene_sheet_truncated") and rows and token == st.session_state.get("scene_sheet_token"):
         st.caption("台本が長いため、先頭部分からシーンを取り出しています。")
     preview = rows if rows else {column: [] for column in SCENE_COLUMNS}
@@ -5584,7 +5947,7 @@ def render_scene_sheet_tool():
     if rows and Workbook is not None:
         st.download_button(
             "📥 解析結果をExcelでダウンロード",
-            data=scene_sheet_bytes(rows),
+            data=scene_batch_workbook(rows),
             file_name="シーン別撮影場所.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="scene_result_download",
