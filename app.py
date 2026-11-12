@@ -874,6 +874,43 @@ SYSTEM_INSTRUCTION += (
     + FIELD_ARCHIVE
 )
 
+FIELD_PRACTICE_SCRIPT = """
+### 回答の基本スタンス
+抽象的な一般論で終わらせない。具体的な物件名、業者名、料金相場、警察署の癖、NGの回避、代替のプランBをセットで出す。
+質問が曖昧でも、先に現場で最も使われる鉄板を3つ出す。そのあと、時間帯（早朝かナイターか）、車両台数、予算、ネガティブ描写の有無を聞いて絞る。
+この節と「現場実務・業者ナレッジ」に書いてある料金と日数は記録なので使ってよい。そこに無い数字は作らない。電話番号とURLは書かない。
+
+### 道路使用許可・警察署の癖
+警視庁の道路使用許可は、原則として中2〜3日（土日祝を除く）を見る。公園、土木、河川、国交省が絡むときは2週間前。商店街の通行止めと事前告知看板は1ヶ月前から動く。
+原宿署（表参道交差点、ブルガリ前など）は原則12:00まで、少人数（10名以下が目安）。横断歩道上の芝居はNG。モニターはタイヤ付きだけ可、椅子の設置はNG。
+赤坂署の246号は、端の自転車道がネックになる。カラーコーンと自転車誘導員の配置を図面に入れる。周囲の路地は私道（善光寺、栄屋など）が多いので、先に確認する。
+久松署・神田署（日本橋、神田）は、ビル前でエンジンを掛けたままの長時間停車をすぐ取締る。パーキングメーター枠の貸切は不可。車の発進シーンは、車両の後方にパイロンと誘導員を置いた安全措置の図面を付けて協議する。
+新宿署（都庁通り、議事堂通り）の自転車並走とカメラカーは、土日祝の朝10:00まで、30km/h以下、500m区間が目安。歩道は走らない。車道か、青い自転車道だけ。都庁通りは側道があり、逆車線のセッティングがしやすい。
+渋谷署は、朝7:00〜9:00の通勤帯と、12:00〜13:00のランチ帯は、道路使用が原則下りない。
+川崎署は、大通りのタクシー乗り込みなどを、交差点の近くでも協議できる。駐停車禁止を見て、少し下がった位置にする。
+
+### 特殊ロケ・ネガティブ描写
+強盗、暴力、事件、病院、学校など、リアルな店や学校や病院に断られたら、次の二つを出す。実名を出さず、架空の名称と看板隠しにする。入口と外観だけを営業時間外のリアルな店（営業補償）で撮り、店内や破壊やアクションはスタジオかレンタルスペースで繋ぐ。
+大手コンビニ本部（セブン、ローソンなど）は、タイアップ以外は非常に厳しい。コンビニとATMは、プラネアール井荻（ATM、広いトイレ、レジ操作可）、プラネアール環七（2階事務所とバックヤード）、または個人商店へATMを持ち込む。
+取調室は、昭栄第2錦町ビル（神田。EL取扱責任者の選任と黄色い襷が必須）、プラネアール調布、studio358（川崎）。
+武蔵野の森公園は調布飛行場に近く、レフ板、照明、電動キックボードが一切NG。ヘルメットなしの自転車ナイターなど公道が厳しいシーンは、早渕川沿い（センター南。土手扱い）、かずさアカデミア公園（木更津）、習志野市香澄公園、藤沢市立二番構公園など、公道の外の園路を使う。
+大衆演劇は、興行元（篠原演芸企画など）へ先に筋を通す。他劇団の公演中に、楽屋と舞台裏へ無断で入らない。浅草木馬館の周りは浅草商店会の景観協定で、各店のひさしの中への立ち入り、機材置き、たむろが禁止（中央の石畳だけ）。9時以降の道路機材、夜間の大声とゼネ音はNG。支度は、大島三丁目町会会館、立川曙町一丁目西町会公会堂など、近くの町会会館を押さえる。
+
+### お弁当・コスト
+1,000円以内なら、調布・日活エリアは坂下（税込864円〜972円。ササミチーズカツ、メバルの西京焼きなど）。定番は味彩ロケ弁ファクトリー（720円〜）。早朝5:00〜6:30はポパイのおにぎり。
+箱物のスタジオでは、ペットボトルを減らし、コーヒーメーカーと保温ポットにする。用紙、養生テープ、ゴミ袋は、通販より近くのホームセンター（コーナン、DCMなど）で買う。ゴミを撮影所へ持ち帰るときは、作品名が分かる熨斗と張り紙を必ず剥がす。
+
+### 車両・支度・マンション
+水場とトイレが遠い現場（山道、埠頭、高架下）は、イシジマのメイクバス（トイレ付き。基本8時間55,000円〜）か、アクティスのトイレカーを手配する。
+ジャンボタクシーが無い地方（行田など）は、個人の貸切タクシー（中澤タクシーなど。7人乗り、30分約4,020円〜）をチャーターする。
+住んでいるマンションと住宅は、下の階への足音を避けるため、クロックスとスリッパを禁止し、靴か指定の内履きにする。前日のメールで全員に伝える。エレベーター内と1階の動線はプラダンと養生テープで覆う。搬出入は上と下にスタッフを置き、居住者を優先する。
+"""
+
+SYSTEM_INSTRUCTION += (
+    "\n\n【現場実戦トークスクリプト。質問がこの範囲なら、物件名・業者名・料金相場・署の癖・回避とプランBまで落として答える】\n"
+    + FIELD_PRACTICE_SCRIPT
+)
+
 
 def craft_body(kind: str) -> tuple[str, str]:
     if kind == "money":
@@ -921,6 +958,12 @@ def craft_reply(kind: str, user_text: str = "", messages: list[dict] | None = No
             if kind == "field"
             else "下にチェックリストを出すので、同じ箇条書きは繰り返さない。"
         )
+        vendor = ""
+        try:
+            vendor = field_vendor_cue(user_text)
+        except Exception:
+            vendor = ""
+        packed = body if not vendor else body + "\n\n" + vendor
         prompt = (
             "あなたは現場を20年歩いてきたYUMITA。渡した制作部の知識だけを土台に、この質問へ直接答える。"
             "温かく頼もしく、明日の現場で使える具体で、6文以内。"
@@ -928,7 +971,7 @@ def craft_reply(kind: str, user_text: str = "", messages: list[dict] | None = No
             "電話番号、住所、作品名、撮影日、俳優名は作らない。空欄は空欄のまま残す。\n\n"
             f"【これまでの会話】\n{history_block(messages or []) or '（なし）'}\n\n"
             f"【質問】\n{user_text or lead}\n\n"
-            f"【実データ】\n{body}"
+            f"【実データ】\n{packed}"
         )
         box: dict[str, str] = {}
         models = model_chain()
@@ -2247,6 +2290,12 @@ def ask_gemini(
         cue = ""
     if cue:
         shown = cue if shown == "（なし）" else f"{shown}\n\n{cue}"
+    try:
+        vendor = field_vendor_cue(user_text)
+    except Exception:
+        vendor = ""
+    if vendor:
+        shown = vendor if shown == "（なし）" else f"{shown}\n\n{vendor}"
     prompt = f"""
 {task}
 
@@ -2761,6 +2810,10 @@ def refresh_csv_bundle() -> None:
     import time
     from concurrent.futures import ThreadPoolExecutor
 
+    try:
+        refresh_field_vendor_rows()
+    except Exception:
+        pass
     now = time.monotonic()
     if (SHEET_CACHE.get("rows") or MASTER_CACHE.get("rows")) and now - float(SHEET_CACHE.get("at") or 0) < 1800:
         return
@@ -3082,6 +3135,12 @@ def ask_gemini_timed(user_text: str, messages: list[dict] | None, task: str, sec
         cue = ""
     if cue:
         prompt = f"{prompt}\n{cue}\n"
+    try:
+        vendor = field_vendor_cue(user_text)
+    except Exception:
+        vendor = ""
+    if vendor:
+        prompt = f"{prompt}\n{vendor}\n"
     box: dict[str, str] = {}
 
     def run() -> None:
@@ -3245,7 +3304,104 @@ SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 SPREADSHEET_ID = "1wqzKFN5GqvLjURzJNZ_ypNOC1jaYfYlVj6eDlAcUH44"
 SHEET1_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=0"
 MASTER_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=2043901308"
+FIELD_VENDOR_SHEET = "現場実務・業者ナレッジ"
+FIELD_VENDOR_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 QUERY_SHEET_NAME = "未解決クエリ"
+
+
+def field_vendor_csv_url() -> str:
+    from urllib.parse import quote
+
+    return (
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet="
+        + quote(FIELD_VENDOR_SHEET)
+    )
+
+
+def refresh_field_vendor_rows() -> None:
+    import time
+
+    now = time.monotonic()
+    cached = list(FIELD_VENDOR_CACHE.get("rows") or [])
+    age = now - float(FIELD_VENDOR_CACHE.get("at") or 0)
+    if FIELD_VENDOR_CACHE.get("at") and age < (1800 if cached else 180):
+        return
+    table: list[list[str]] = []
+    try:
+        table = read_csv_table(field_vendor_csv_url())
+    except Exception:
+        table = []
+    if len(table) <= 1:
+        try:
+            book = open_master_book()
+            if book is not None:
+                table = book.worksheet(FIELD_VENDOR_SHEET).get_all_values() or []
+        except Exception:
+            table = table or []
+    rows: list[dict[str, str]] = []
+    if table:
+        header = [str(cell or "").strip() or f"col{index}" for index, cell in enumerate(table[0])]
+        for cells in table[1:]:
+            if not any(str(cell or "").strip() for cell in cells):
+                continue
+            item = {}
+            for index, key in enumerate(header):
+                item[key] = csv_cell(cells, index)
+            if any(item.values()):
+                rows.append(item)
+    FIELD_VENDOR_CACHE["rows"] = rows
+    FIELD_VENDOR_CACHE["at"] = now
+
+
+def field_vendor_cue(query: str) -> str:
+    try:
+        refresh_field_vendor_rows()
+        rows = list(FIELD_VENDOR_CACHE.get("rows") or [])
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    raw = query or ""
+    terms = []
+    for term in re.findall(r"[一-龥ァ-ヶA-Za-z0-9]{2,16}", raw):
+        if term not in terms and term not in {"教えて", "ください", "お願い", "現場", "撮影"}:
+            terms.append(term)
+        if len(terms) >= 8:
+            break
+    scored = []
+    for row in rows:
+        blob = " ".join(str(value or "") for key, value in row.items() if key != "ソース")
+        score = sum(2 if term in blob else 0 for term in terms)
+        category = str(row.get("カテゴリ") or "")
+        if category and category[:4] in raw:
+            score += 3
+        scored.append((score, row))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    picked = [row for score, row in scored if score > 0][:6]
+    broad = re.search(
+        r"警察|道路|許可|弁当|ケータリング|業者|養生|タクシー|公園|劇場|メイク|トイレ|車両|配車|予算|差し入れ|商店街|コンビニ|取調|廃墟|ネガティブ|マンション",
+        raw,
+    )
+    if not picked and broad:
+        picked = [row for _score, row in scored][:8]
+    if not picked:
+        return ""
+    lines = ["【現場実務・業者ナレッジ】"]
+    for row in picked:
+        category = str(row.get("カテゴリ") or "").strip()
+        name = str(row.get("項目・業者名") or row.get("名称") or "").strip()
+        area = PHONE_RE.sub("", str(row.get("エリア・連絡先") or ""))
+        area = re.sub(r"https?://\S+", "", area)
+        area = re.sub(r"\s+", " ", area).strip(" 、/")
+        note = PHONE_RE.sub("", str(row.get("料金・条件・実務ノウハウ") or row.get("内容") or ""))
+        note = re.sub(r"https?://\S+", "", note)
+        note = re.sub(r"\s+", " ", note).strip()
+        bits = [part for part in (category, name, area, note[:280]) if part]
+        if bits:
+            lines.append("- " + " / ".join(bits))
+    if len(lines) < 2:
+        return ""
+    return "\n".join(lines)
 QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
 LOG_SHEET_NAME = "検索ログ"
 LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
