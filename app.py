@@ -911,6 +911,28 @@ SYSTEM_INSTRUCTION += (
     + FIELD_PRACTICE_SCRIPT
 )
 
+DOCUMENT_RESCUE_SCRIPT = """
+### モードA：制作部ドキュメント一発生成
+ユーザーが、挨拶文、撮影のお知らせ、撮影のお願い文面、警察協議用のメモ、ロケ交渉メール、タイアップの打診、現場注意事項、撮影時のお願い、を「作って」「書いて」「出して」と頼んだときだけ、このモードにする。
+解説は2文まで。そのあと空行を置き、印刷・メール・LINEにそのまま貼れる完成文面だけを続ける。文面の中に解説を混ぜない。分からない欄は〔　〕のまま残す。電話番号、URL、個人の自宅、放送日は書かない。実データに無い料金と最低注文個数は作らない。
+1. 近隣・管理組合向け「撮影のお知らせ（挨拶文）」：タイトルは「撮影ご協力のお願い」。作品名は仮題かコードネーム。撮影日時と予備日、撮影場所、車両の駐車と搬入出、騒音と照明漏れ、制作担当の連絡先。
+2. 全スタッフ・キャスト向け「現場注意事項・撮影時のお願い」：土足禁止。クロックスとスリッパは禁止で、靴か指定の内履き。養生はプラダン、毛布、養生テープ。待機と車両動線は住民優先、アイドリングストップ、駐車禁止エリアを守る。喫煙は指定の喫煙所だけ。ゴミは分別し、作品名が分かる熨斗と張り紙は剥がす。他劇団の楽屋、舞台裏、私道は撮影禁止。
+3. 警察署協議用「道路使用・安全措置説明メモ」：誘導員の人数、カラーコーンの位置、歩行者と自転車の誘導、1カットは数分で通行止めなし、緊急車両を優先。署の癖は、このトークと実データに書いてあるものだけ使う。
+4. ロケ先・店舗向け「撮影交渉・営業補償／タイアップ打診文面」：企画趣旨、希望日時、人数と機材規模、原状復帰、保険加入、店名やクレジットの出し方、タイアップの料金相談。
+
+### モードB：緊急トラブル・プランB即提案
+雨でロケが飛ぶ、急にNGが出る、弁当がキャンセルになる、トイレや水場が無い、駐車場が埋まる、などの緊急相談は、次の順で短く出す。
+1. プランA、プランB、プランC。実データにある類似の場所、屋根や屋内、近い弁当、トイレや車両の業者から、エリア・時間・屋根・駐車場が合う順に3つ。無い名前は作らない。使用実績が実データにあるときだけ「過去の〇〇組で使用実績あり」と添える。
+2. 今すぐやること。許可や道路使用の差し替えが要るか、車両と別トラの待機を変えるか、弁当の切り替え、香盤とスタッフへの連絡、の順でチェックにする。
+爆破、公道の完全封鎖、カーアクション、カースタントは、このモードより先に特殊撮影の窓口案内を守る。候補の場所は出さない。
+通常の回答でも、実データに情報元や提供元がある候補には「過去の〇〇組で使用実績あり」と短く添えてよい。放送日時、URL、「出典」という見出しは書かない。
+"""
+
+SYSTEM_INSTRUCTION += (
+    "\n\n【書類一発生成と緊急プランB。これまでの制作部実務ノウハウと現場実戦トークは残したまま、この依頼のときだけこの型で答える】\n"
+    + DOCUMENT_RESCUE_SCRIPT
+)
+
 
 def craft_body(kind: str) -> tuple[str, str]:
     if kind == "money":
@@ -959,11 +981,22 @@ def craft_reply(kind: str, user_text: str = "", messages: list[dict] | None = No
             else "下にチェックリストを出すので、同じ箇条書きは繰り返さない。"
         )
         vendor = ""
+        reference = ""
         try:
-            vendor = field_vendor_cue(user_text)
+            if kind != "field":
+                reference = hybrid_context(user_text)
         except Exception:
-            vendor = ""
-        packed = body if not vendor else body + "\n\n" + vendor
+            reference = ""
+        if not reference:
+            try:
+                vendor = field_vendor_cue(user_text)
+            except Exception:
+                vendor = ""
+        packed = body
+        if vendor:
+            packed = body + "\n\n" + vendor
+        if reference:
+            packed = packed + "\n\n" + reference
         prompt = (
             "あなたは現場を20年歩いてきたYUMITA。渡した制作部の知識だけを土台に、この質問へ直接答える。"
             "温かく頼もしく、明日の現場で使える具体で、6文以内。"
@@ -2269,6 +2302,7 @@ def ask_gemini(
     mime: str | None,
     facts: str = "",
     task: str = "",
+    paste: bool = False,
 ) -> str:
     guided = bool(task)
     prior = history_block(messages)
@@ -2279,23 +2313,16 @@ def ask_gemini(
             "紹介は2文まで。そのあと候補を箇条書きにする。"
             "1件につき必ず1行。行頭は「- 」。"
             "JSONや {\"name\": ...} は書かない。ロケ地の列挙はしない。お弁当なら1店舗につき1ブロックで、店名、エリア、価格帯、配達条件を改行する。"
-            "撮影日と作品名は書かない。1行の中に次の候補を続けない。"
+            "撮影日と放送日時は書かない。実データに使用実績があるときだけ「過去の〇〇組で使用実績あり」と短く添えてよい。"
+            "作品名の全文は書かない。1行の中に次の候補を続けない。"
         )
     elif not task:
         task = "実データの一覧は渡していない。施設名や店名を作って候補として出さない。相談、挨拶、文章作成には直接答える。"
     shown = facts or "（なし）"
     try:
-        cue = csv_location_cue(user_text)
+        shown = attach_reference(shown, user_text)
     except Exception:
-        cue = ""
-    if cue:
-        shown = cue if shown == "（なし）" else f"{shown}\n\n{cue}"
-    try:
-        vendor = field_vendor_cue(user_text)
-    except Exception:
-        vendor = ""
-    if vendor:
-        shown = vendor if shown == "（なし）" else f"{shown}\n\n{vendor}"
+        pass
     prompt = f"""
 {task}
 
@@ -2326,15 +2353,29 @@ def ask_gemini(
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.4 if facts or guided else 0.6,
-                    max_output_tokens=1600 if "10件" in (task or "") else (900 if guided else (1600 if facts else 800)),
+                    max_output_tokens=(
+                        2200 if ("完成文面" in (task or "") or "プランA" in (task or ""))
+                        else (1600 if "10件" in (task or "") else (900 if guided else (1600 if facts else 800)))
+                    ),
                 ),
             )
-            reply_text = guard_speech(response.text or "")
+            raw_reply = getattr(response, "text", "") or ""
+            reply_text = paste_guard(raw_reply) if paste else guard_speech(raw_reply)
             if reply_text and not looks_like_failure(reply_text):
                 return reply_text
         except Exception:
             continue
     return ""
+
+
+def paste_guard(text: str) -> str:
+    raw = str(text or "")
+    raw = re.sub(r"```(?:[a-zA-Z0-9_-]+)?", "", raw)
+    raw = re.sub(r"```", "", raw)
+    raw = re.sub(r"https?://\S+", "", raw)
+    raw = PHONE_RE.sub("", raw)
+    raw = re.sub(r"\[\s*\{[\s\S]*?\}\s*\]", "", raw)
+    return re.sub(r"\n{3,}", "\n\n", raw).strip()
 
 
 def desk_seed(user_text: str) -> str:
@@ -2397,6 +2438,97 @@ def desk_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str,
     if not spoken:
         spoken = desk_seed(user_text)
     return f"<div class='bubble'>{rich_text(spoken)}</div>{desk_card_html()}", True
+
+
+def document_skeleton(text: str) -> str:
+    raw = text or ""
+    if re.search(r"現場注意|撮影時のお願い|スタッフ向け", raw):
+        return (
+            "現場注意事項・撮影時のお願い\n"
+            "・土足禁止。クロックス、スリッパは禁止。靴か指定の内履き。\n"
+            "・廊下、エレベーター、床はプラダン、毛布、養生テープで保護する。\n"
+            "・待機と車両は住民優先。アイドリングストップ。駐車禁止エリアに止めない。\n"
+            "・喫煙は指定の喫煙所だけ。\n"
+            "・ゴミは分別。作品名が分かる熨斗と張り紙は剥がしてから戻す。\n"
+            "・他劇団の楽屋、舞台裏、私道は撮影禁止。\n"
+            "連絡先：〔制作担当〕"
+        )
+    if re.search(r"協議|道路使用|安全措置", raw):
+        return (
+            "道路使用・安全措置説明メモ\n"
+            "署：〔所轄〕\n"
+            "場所：〔道路名〕\n"
+            "時間：〔開始〕〜〔終了〕\n"
+            "・誘導員：〔人数〕名。横断と歩道側に配置。\n"
+            "・カラーコーン：車線の端と車両の後方。\n"
+            "・歩行者と自転車は誘導員が止めて通す。\n"
+            "・1カットは数分。通行止めはしない。\n"
+            "・緊急車両は最優先で通す。"
+        )
+    if re.search(r"交渉|タイアップ|営業補償", raw):
+        return (
+            "撮影のご相談\n"
+            "〔店名〕ご担当者様\n"
+            "企画：〔仮題・コードネーム〕\n"
+            "希望日時：〔日時〕\n"
+            "人数・機材：〔人数〕、〔機材規模〕\n"
+            "原状復帰と保険加入のうえ、営業への影響は事前にご相談します。\n"
+            "店名やクレジットの出し方、タイアップの条件も合わせてご相談させてください。\n"
+            "制作担当：〔氏名・連絡先〕"
+        )
+    return (
+        "撮影ご協力のお願い\n"
+        "作品名：〔仮題・コードネーム〕\n"
+        "撮影日時：〔日時〕\n"
+        "予備日：〔予備日〕\n"
+        "撮影場所：〔場所〕\n"
+        "車両は〔駐車位置〕に止め、搬入出は〔時間〕にまとめます。\n"
+        "騒音と照明が漏れないよう、〔対策〕をします。\n"
+        "ご不明点は制作担当〔連絡先〕までご連絡ください。"
+    )
+
+
+def document_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
+    task = (
+        "これは完成文面の依頼。解説は2文まで。空行のあと、貼って使える完成文面だけを続ける。"
+        "近隣挨拶、スタッフ注意、警察協議メモ、交渉文のどれか、質問に合う型にする。"
+        "空欄は〔　〕のまま。電話番号とURLは作らない。個人の自宅は書かない。"
+        "爆破、公道の完全封鎖、カースタントなら文面を作らず、特殊撮影は窓口相談だとだけ書く。"
+    )
+    spoken = ask_gemini(user_text, messages or [], None, None, "", task, True)
+    body = spoken or document_skeleton(user_text)
+    parts = body.split("\n", 1)
+    if len(parts) > 1 and parts[1].strip():
+        lead = parts[0].strip() or "このままコピーして使ってください。"
+        letter = parts[1].strip()
+    else:
+        lead = "このままコピーして使ってください。"
+        letter = body
+    return (
+        f"<div class='bubble'><p>{html.escape(lead)}</p>"
+        f"<div class='copy-block'>{html.escape(letter)}</div></div>",
+        True,
+    )
+
+
+def rescue_reply(user_text: str, messages: list[dict] | None = None) -> tuple[str, bool]:
+    task = (
+        "緊急の立て直し。プランA、プランB、プランCの順で、実データにある候補だけを3つ。"
+        "屋根、屋内、近い弁当、トイレ、駐車場が質問に合うものを優先。"
+        "使用実績があるときだけ「過去の〇〇組で使用実績あり」と添える。"
+        "そのあと、今すぐやることを、許可の差し替え、車両の待機、弁当の切り替え、香盤とスタッフ連絡の順で書く。"
+        "無い店名と場所は作らない。電話番号とURLは書かない。最低注文個数は実データに無い数字を作らない。"
+    )
+    spoken = ask_gemini(user_text, messages or [], None, None, "", task, False)
+    if not spoken:
+        spoken = (
+            "プランA：屋根のある屋内かスタジオを、同じエリアで先に仮押さえする。\n"
+            "プランB：近い仕出しを1社、届く時間で切り替える。\n"
+            "プランC：トイレと駐車は、実データにある業者か施設に切り替える。\n"
+            "今すぐやること：許可の差し替えが要るか確認する。車両の待機位置を変える。"
+            "弁当の切り替えを入れる。香盤とスタッフに先に伝える。"
+        )
+    return f"<div class='bubble'>{rich_text(spoken)}</div>", True
 
 
 def conversation_reply(
@@ -2794,7 +2926,7 @@ def read_csv_table(url: str) -> list[list[str]]:
     try:
         request = urllib.request.Request(url, headers={"User-Agent": "YUMI-CHA/1.0"})
         with urllib.request.urlopen(request, timeout=15) as response:
-            payload = response.read(12_000_000)
+            payload = response.read(32_000_000)
             kind = str(response.headers.get("Content-Type") or "")
         if payload.lstrip()[:1] == b"<" or ("html" in kind.lower() and "csv" not in kind.lower()):
             return []
@@ -2806,12 +2938,30 @@ def read_csv_table(url: str) -> list[list[str]]:
         return []
 
 
+def brief_source(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw or raw.lower().startswith("http") or "://" in raw:
+        return ""
+    raw = re.sub(r"https?://\S+", "", raw)
+    raw = PHONE_RE.sub("", raw)
+    raw = re.sub(r"\s*\d{4}\s*年.*$", "", raw)
+    raw = re.split(r"\s[/／]\s", raw)[0]
+    raw = re.sub(r"\s+", " ", raw).strip(" 　/／")
+    if re.search(r"自宅|個人宅|実家|号室|表札", raw):
+        return ""
+    return raw[:48]
+
+
 def refresh_csv_bundle() -> None:
     import time
     from concurrent.futures import ThreadPoolExecutor
 
     try:
         refresh_field_vendor_rows()
+    except Exception:
+        pass
+    try:
+        refresh_bento_sheet_rows()
     except Exception:
         pass
     now = time.monotonic()
@@ -2867,6 +3017,7 @@ def refresh_csv_bundle() -> None:
                     "scene": label,
                     "scenes_category": label,
                     "works_title": "",
+                    "source_note": brief_source(csv_cell(cells, 5)),
                     "detail_text": "",
                     "facility_spec": "",
                     "site_name": csv_cell(cells, 4) or "ロケ地",
@@ -3052,7 +3203,8 @@ def detail_reply(user_text: str, messages: list[dict] | None = None) -> tuple[st
         "\n\n".join(facts) or "（この施設の台帳行はまだない）",
         "この質問の施設だけを、4文から6文で答える。JSONは書かない。"
         "撮影受入条件は土日祝、夜間、事前申請が分かれば書く。不明なら要相談。"
-        "向いているシーンと搬入の要点を続ける。作品名、撮影日、俳優名、URL、電話番号は書かない。",
+        "向いているシーンと搬入の要点を続ける。作品名の全文、撮影日、俳優名、URL、電話番号は書かない。"
+        "使用実績が実データにあるときだけ「過去の〇〇組で使用実績あり」と添えてよい。",
     )
     spoken = drop_empty_claims(spoken)
     if not spoken and facts:
@@ -3130,17 +3282,9 @@ def ask_gemini_timed(user_text: str, messages: list[dict] | None, task: str, sec
     prior = history_block(messages or [])
     prompt = f"{task}\n\n【これまでの会話】\n{prior or '（なし）'}\n\n【質問】\n{user_text}\n"
     try:
-        cue = csv_location_cue(user_text)
+        prompt = attach_reference(prompt, user_text)
     except Exception:
-        cue = ""
-    if cue:
-        prompt = f"{prompt}\n{cue}\n"
-    try:
-        vendor = field_vendor_cue(user_text)
-    except Exception:
-        vendor = ""
-    if vendor:
-        prompt = f"{prompt}\n{vendor}\n"
+        pass
     box: dict[str, str] = {}
 
     def run() -> None:
@@ -3306,6 +3450,8 @@ SHEET1_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?fo
 MASTER_CSV = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=2043901308"
 FIELD_VENDOR_SHEET = "現場実務・業者ナレッジ"
 FIELD_VENDOR_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
+BENTO_SHEET = "お弁当"
+BENTO_SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 QUERY_SHEET_NAME = "未解決クエリ"
 
 
@@ -3351,6 +3497,50 @@ def refresh_field_vendor_rows() -> None:
                 rows.append(item)
     FIELD_VENDOR_CACHE["rows"] = rows
     FIELD_VENDOR_CACHE["at"] = now
+
+
+def bento_sheet_csv_url() -> str:
+    from urllib.parse import quote
+
+    return (
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet="
+        + quote(BENTO_SHEET)
+    )
+
+
+def refresh_bento_sheet_rows() -> None:
+    import time
+
+    now = time.monotonic()
+    cached = list(BENTO_SHEET_CACHE.get("rows") or [])
+    age = now - float(BENTO_SHEET_CACHE.get("at") or 0)
+    if BENTO_SHEET_CACHE.get("at") and age < (1800 if cached else 180):
+        return
+    table: list[list[str]] = []
+    try:
+        table = read_csv_table(bento_sheet_csv_url())
+    except Exception:
+        table = []
+    if len(table) <= 1:
+        try:
+            book = open_master_book()
+            if book is not None:
+                table = book.worksheet(BENTO_SHEET).get_all_values() or []
+        except Exception:
+            table = table or []
+    rows: list[dict[str, str]] = []
+    if table:
+        header = [str(cell or "").strip() or f"col{index}" for index, cell in enumerate(table[0])]
+        for cells in table[1:]:
+            if not any(str(cell or "").strip() for cell in cells):
+                continue
+            item = {}
+            for index, key in enumerate(header):
+                item[key] = csv_cell(cells, index)
+            if any(item.values()):
+                rows.append(item)
+    BENTO_SHEET_CACHE["rows"] = rows
+    BENTO_SHEET_CACHE["at"] = now
 
 
 def field_vendor_cue(query: str) -> str:
@@ -3402,6 +3592,296 @@ def field_vendor_cue(query: str) -> str:
     if len(lines) < 2:
         return ""
     return "\n".join(lines)
+
+
+CUE_CAP = 18
+CUE_SKIP = {
+    "教えて", "ください", "お願い", "現場", "撮影", "作って", "書いて", "出して", "文面", "メモ",
+    "です", "ます", "したい", "ほしい", "欲しい", "ロケ", "場所", "ください", "下さい",
+}
+DOC_QUERY_RE = re.compile(
+    r"挨拶文|撮影のお知らせ|撮影のご協力|撮影のお願い文|お願い文面|"
+    r"協議用|協議メモ|安全措置説明|道路使用.{0,6}メモ|"
+    r"交渉メール|交渉文|タイアップ|営業補償|"
+    r"現場注意事項|撮影時のお願い|スタッフ向け.{0,16}(?:お願い|注意)"
+)
+RESCUE_QUERY_RE = re.compile(
+    r"雨で|雨天中止|ロケが飛|撮影が飛|急遽.{0,8}NG|NGが出|断られた|"
+    r"弁当がキャンセル|弁当が届か|キャンセルになった|"
+    r"トイレが(?:ない|無い)|水場が(?:ない|無い)|駐車場が埋|代替案|プランB"
+)
+
+
+def is_document_query(text: str) -> bool:
+    raw = text or ""
+    if SPECIAL_CONSULT_RE.search(raw):
+        return False
+    return bool(DOC_QUERY_RE.search(raw))
+
+
+def is_rescue_query(text: str) -> bool:
+    raw = text or ""
+    if SPECIAL_CONSULT_RE.search(raw):
+        return False
+    return bool(RESCUE_QUERY_RE.search(raw))
+
+
+def cue_terms(query: str) -> list[str]:
+    found: list[str] = []
+    try:
+        if csv_location_index is not None:
+            for term in csv_location_index.query_terms(query, 8):
+                if term not in CUE_SKIP and term not in found:
+                    found.append(term)
+    except Exception:
+        pass
+    for term in re.findall(r"[一-龥ァ-ヶA-Za-z0-9]{2,16}", query or ""):
+        if term in CUE_SKIP or term in found:
+            continue
+        found.append(term)
+        if len(found) >= 8:
+            break
+    return found[:8]
+
+
+def cue_score(blob: str, name: str, terms: list[str], query: str) -> int:
+    hits = [term for term in terms if term and term in blob]
+    if not hits:
+        return 0
+    lead = terms[0]
+    if lead not in hits and len(hits) < 2:
+        return 0
+    score = len(hits) * 3
+    for term in hits:
+        score += 5 if term in name else 1
+    if re.search(r"雨", query) and re.search(r"屋内|スタジオ|屋根|室内", blob):
+        score += 4
+    if "駐車" in query and "駐車" in blob:
+        score += 3
+    if "東京" in blob and not re.search(r"大阪|京都|北海道|福岡|名古屋|神奈川|千葉|埼玉", query):
+        score += 1
+    return score
+
+
+def location_cue_lines(query: str, terms: list[str]) -> list[str]:
+    pool: list[dict] = []
+    try:
+        pool.extend(master_location_rows())
+    except Exception:
+        pass
+    try:
+        pool.extend(sheet_rows())
+    except Exception:
+        pass
+    ranked = []
+    seen = set()
+    for row in pool:
+        try:
+            if not acceptable_public_row(row):
+                continue
+        except Exception:
+            continue
+        name = str(row.get("location_name") or "").strip()
+        address = str(row.get("address") or "").strip()
+        if not name or re.search(r"自宅|個人宅|実家|号室|表札", f"{name}{address}"):
+            continue
+        blob = " ".join(
+            str(row.get(key) or "")
+            for key in ("location_name", "address", "scene", "condition", "accept_terms", "site_name", "source_note")
+        )
+        score = cue_score(blob, name, terms, query)
+        if not score:
+            continue
+        key = re.sub(r"\s+", "", name)
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append((
+            score,
+            name,
+            address,
+            str(row.get("condition") or row.get("accept_terms") or "")[:80],
+            str(row.get("scene") or "")[:40],
+            brief_source(str(row.get("source_note") or "")),
+        ))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    lines = []
+    for _score, name, address, condition, scene, source in ranked[:CUE_CAP]:
+        bits = [name, address, condition, scene]
+        if source:
+            bits.append(f"使用実績: {source}")
+        lines.append("- " + " / ".join(bit for bit in bits if bit))
+    return lines
+
+
+def bento_cue_lines(query: str, terms: list[str]) -> list[str]:
+    rows: list[dict] = []
+    try:
+        refresh_bento_sheet_rows()
+        rows = list(BENTO_SHEET_CACHE.get("rows") or [])
+    except Exception:
+        rows = []
+    ranked = []
+    seen = set()
+    for row in rows:
+        name = str(row.get("店舗名") or row.get("名称") or "").strip()
+        if not name:
+            continue
+        area = str(row.get("配達可能エリア") or row.get("エリア") or "")
+        price = str(row.get("価格帯") or "")
+        feature = str(row.get("特徴") or "")
+        source = brief_source(str(row.get("提供元") or row.get("提供元（作品名）") or ""))
+        blob = " ".join((name, area, price, feature, str(row.get("ジャンル") or ""), source))
+        if re.search(r"自宅|個人宅|実家|号室|表札", blob):
+            continue
+        score = cue_score(blob, name, terms, query)
+        if not score:
+            continue
+        key = re.sub(r"\s+", "", name)
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append((score, name, area, price, feature[:60], source))
+    if len(ranked) < 5:
+        try:
+            from guild_knowledge import bento_for_query
+            for shop in bento_for_query(query, limit=CUE_CAP) or []:
+                name = str(shop.get("name") or "").strip()
+                area = str(shop.get("area") or "")
+                blob = f"{name} {area}"
+                score = cue_score(blob, name, terms, query)
+                if not name or not score:
+                    continue
+                key = re.sub(r"\s+", "", name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                ranked.append((score, name, area, "", "", ""))
+        except Exception:
+            pass
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    lines = []
+    for _score, name, area, price, feature, source in ranked[:CUE_CAP]:
+        bits = [name, PHONE_RE.sub("", area), price, feature]
+        if source:
+            bits.append(f"使用実績: {source}")
+        lines.append("- " + " / ".join(bit for bit in bits if bit))
+    return lines
+
+
+def vendor_cue_lines(query: str, terms: list[str]) -> list[str]:
+    rows: list[dict] = []
+    try:
+        refresh_field_vendor_rows()
+        rows = list(FIELD_VENDOR_CACHE.get("rows") or [])
+    except Exception:
+        rows = []
+    ranked = []
+    seen = set()
+    for row in rows:
+        name = str(row.get("項目・業者名") or row.get("名称") or "").strip()
+        category = str(row.get("カテゴリ") or "").strip()
+        area = PHONE_RE.sub("", str(row.get("エリア・連絡先") or ""))
+        area = re.sub(r"https?://\S+", "", area)
+        note = PHONE_RE.sub("", str(row.get("料金・条件・実務ノウハウ") or row.get("内容") or ""))
+        note = re.sub(r"https?://\S+", "", note)
+        source = brief_source(str(row.get("ソース") or row.get("ソース（作品名）") or ""))
+        blob = " ".join((category, name, area, note, source))
+        score = cue_score(blob, name, terms, query)
+        if score and category[:4] and category[:4] in (query or ""):
+            score += 3
+        if not name or score <= 0:
+            continue
+        key = re.sub(r"\s+", "", name)
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append((score, category, name, re.sub(r"\s+", " ", area).strip(" 、/")[:80], re.sub(r"\s+", " ", note).strip()[:120], source))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    lines = []
+    for _score, category, name, area, note, source in ranked[:CUE_CAP]:
+        bits = [category, name, area, note]
+        if source:
+            bits.append(f"使用実績: {source}")
+        lines.append("- " + " / ".join(bit for bit in bits if bit))
+    return lines
+
+
+def hybrid_context(query: str) -> str:
+    raw = query or ""
+    try:
+        if SPECIAL_CONSULT_RE.search(raw) or is_founder_query(raw):
+            return ""
+    except Exception:
+        return ""
+    terms = cue_terms(raw)
+    if not terms:
+        return ""
+    blocks = []
+    try:
+        lines = location_cue_lines(raw, terms)
+        if lines:
+            blocks.append("【ロケ地】\n" + "\n".join(lines))
+    except Exception:
+        pass
+    try:
+        lines = bento_cue_lines(raw, terms)
+        if lines:
+            blocks.append("【お弁当】\n" + "\n".join(lines))
+    except Exception:
+        pass
+    try:
+        lines = vendor_cue_lines(raw, terms)
+        if lines:
+            blocks.append("【現場実務・業者ナレッジ】\n" + "\n".join(lines))
+    except Exception:
+        pass
+    try:
+        if csv_location_index is not None:
+            past = []
+            for row in csv_location_index.search_flexible(raw, CUE_CAP):
+                bits = [str(row.get("name") or "")]
+                if row.get("address"):
+                    bits.append(str(row.get("address") or ""))
+                scene = str(row.get("scene") or "")[:40]
+                if scene:
+                    bits.append(scene)
+                work = brief_source(str(row.get("work") or ""))
+                if work:
+                    bits.append(f"使用実績: {work}")
+                if bits[0]:
+                    past.append("- " + " / ".join(bit for bit in bits if bit))
+            if past:
+                blocks.append("【参考過去ロケ実績】\n" + "\n".join(past))
+    except Exception:
+        pass
+    return "\n\n".join(blocks)
+
+
+def attach_reference(shown: str, user_text: str) -> str:
+    hybrid = ""
+    try:
+        hybrid = hybrid_context(user_text)
+    except Exception:
+        hybrid = ""
+    if hybrid:
+        return hybrid if shown in {"", "（なし）"} else f"{shown}\n\n{hybrid}"
+    cue = ""
+    vendor = ""
+    try:
+        cue = csv_location_cue(user_text)
+    except Exception:
+        cue = ""
+    try:
+        vendor = field_vendor_cue(user_text)
+    except Exception:
+        vendor = ""
+    extra = "\n\n".join(part for part in (cue, vendor) if part)
+    if not extra:
+        return shown
+    return extra if shown in {"", "（なし）"} else f"{shown}\n\n{extra}"
+
+
 QUERY_HEADER = ["質問", "未解決", "フラグ", "件数", "記録日時", "状態"]
 LOG_SHEET_NAME = "検索ログ"
 LOG_HEADER = ["日時", "検索・相談テキスト", "検索ステータス"]
@@ -4135,6 +4615,16 @@ def compose_reply(user_text: str, messages: list[dict], image_bytes: bytes | Non
         row_id = log_search_query(user_text)
         save_log_reply(row_id, reply)
         return reply, True
+    if is_rescue_query(user_text):
+        reply, as_html = rescue_reply(user_text, messages)
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
+    if is_document_query(user_text):
+        reply, as_html = document_reply(user_text, messages)
+        row_id = log_search_query(user_text)
+        save_log_reply(row_id, reply)
+        return reply, as_html
     if bento and classify_craft(user_text) != "field":
         reply = bento_reply(user_text, messages)
         row_id = log_search_query(user_text)

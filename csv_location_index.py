@@ -69,7 +69,7 @@ def ensure_loaded() -> None:
         _failed = True
 
 
-def query_terms(query: str) -> list[str]:
+def query_terms(query: str, limit: int = 4) -> list[str]:
     raw = query or ""
     found: list[str] = []
     for term in QUOTE_RE.findall(raw) + PLACE_RE.findall(raw) + TOKEN_RE.findall(raw):
@@ -79,7 +79,7 @@ def query_terms(query: str) -> list[str]:
         found.append(term)
     kept = [term for term in found if not any(term != other and term in other for other in found)]
     kept.sort(key=len, reverse=True)
-    return kept[:4]
+    return kept[:limit]
 
 
 def search(query: str, limit: int = 5) -> list[dict[str, str]]:
@@ -112,6 +112,52 @@ def search(query: str, limit: int = 5) -> list[dict[str, str]]:
         scored = rank(terms)
         if not scored and len(terms) > 1:
             scored = rank(terms[:1])
+        picked: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for _score, index in scored:
+            name, address, work, scene, _blob = _records[index]
+            key = f"{name}|{address}"
+            if key in seen:
+                continue
+            seen.add(key)
+            picked.append({"name": name, "address": address, "work": work, "scene": scene})
+            if len(picked) >= limit:
+                break
+        return picked
+    except Exception:
+        return []
+
+
+def search_flexible(query: str, limit: int = 18) -> list[dict[str, str]]:
+    """一致した語の数で上位だけを返す。全件は返さない。"""
+    try:
+        ensure_loaded()
+        if not _records:
+            return []
+        terms = query_terms(query, 8)
+        if not terms:
+            return []
+        lead = terms[0]
+        outside = any(name in (query or "") for name in NON_TOKYO)
+        scored: list[tuple[int, int]] = []
+        for index, row in enumerate(_records):
+            blob = row[4]
+            hits = [term for term in terms if term in blob]
+            if not hits:
+                continue
+            if lead not in hits and len(hits) < 2:
+                continue
+            score = len(hits) * 3
+            for term in hits:
+                score += 5 if term in row[0] else 1
+                if term in row[2] or term in row[3]:
+                    score += 2
+            if lead in row[0]:
+                score += 3
+            if not outside and "東京" in blob:
+                score += 2
+            scored.append((score, index))
+        scored.sort(key=lambda item: item[0], reverse=True)
         picked: list[dict[str, str]] = []
         seen: set[str] = set()
         for _score, index in scored:
