@@ -289,6 +289,8 @@ def short_error(exc: Exception) -> str:
         return "Wordを読む部品がありません"
     if "401" in text or "unauthenticated" in lowered or "account_state_invalid" in lowered:
         return "Gemini APIキーが無効です。.env の GEMINI_API_KEY を新しいキーに差し替えてください"
+    if "403" in text or "permission_denied" in lowered or "consumer_suspended" in lowered:
+        return "Geminiのプロジェクトが停止または権限不足です。別プロジェクトの有効な API キーに差し替えてください"
     if "429" in text or "RESOURCE_EXHAUSTED" in text:
         return "通信が混み合っているため、次回に回します"
     if "credentials" in lowered or "oauth" in lowered:
@@ -298,7 +300,14 @@ def short_error(exc: Exception) -> str:
 
 def is_gemini_auth_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return "401" in text or "unauthenticated" in text or "account_state_invalid" in text
+    return (
+        "401" in text
+        or "403" in text
+        or "unauthenticated" in text
+        or "permission_denied" in text
+        or "account_state_invalid" in text
+        or "consumer_suspended" in text
+    )
 
 
 def default_query(days: int) -> str:
