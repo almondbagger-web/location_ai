@@ -76,10 +76,52 @@ EXTRA_SOURCES = [
         "include": ("films", "location", "ロケ", "公園", "公共"),
     },
     {
+        "prefecture": "神奈川県",
+        "site_name": "かわさきロケ情報",
+        "home": "https://www.kawasaki-location.org/location/public.html",
+        "include": ("/location/", "public", "ロケ"),
+    },
+    {
+        "prefecture": "神奈川県",
+        "site_name": "湘南藤沢フィルム・コミッション",
+        "home": "http://www.shonanfujisawa.jp/",
+        "include": ("location", "ロケ", "film"),
+    },
+    {
+        "prefecture": "埼玉県",
+        "site_name": "埼玉県ロケーションサービス",
+        "home": "https://chocotabi-saitama.jp/business/location-top/",
+        "include": ("location", "ロケ", "business"),
+    },
+    {
         "prefecture": "千葉県",
         "site_name": "千葉県フィルムコミッション新着",
         "home": "https://fc.ccb.or.jp/",
         "include": ("/news", "/location", "新着", "弁当"),
+    },
+    {
+        "prefecture": "千葉県",
+        "site_name": "かずさアークフィルムコミッション",
+        "home": "https://www.kap.co.jp/film/",
+        "include": ("/film", "ロケ", "撮影"),
+    },
+    {
+        "prefecture": "千葉県",
+        "site_name": "木更津市公開ページ",
+        "home": "https://www.city.kisarazu.lg.jp/",
+        "include": ("観光", "ロケ", "撮影", "film"),
+    },
+    {
+        "prefecture": "全国",
+        "site_name": "撮影NAVI",
+        "home": "https://satsuei-navi.com/",
+        "include": ("/location", "/spot", "/studio", "ロケ"),
+    },
+    {
+        "prefecture": "全国",
+        "site_name": "ロカナビ",
+        "home": "https://locanavi.com/",
+        "include": ("/location", "/spot", "ロケ"),
     },
     {
         "prefecture": "栃木県",
@@ -545,11 +587,26 @@ def sheet_index(worksheet) -> tuple[set[str], set[str]]:
     return names, urls
 
 
+def run_drama_expansion(limit: int, dry_run: bool) -> None:
+    """ドラマ/FC拡張収集（crawl_drama_locations）を続けて走らせる。"""
+    try:
+        import crawl_drama_locations as drama
+    except Exception as exc:
+        print(f"拡張収集の読込をスキップ: {exc}")
+        return
+    print("\n--- 拡張収集（関東FC・ドラマロケ地）---")
+    try:
+        drama.run(max(limit, 1), PAUSE, dry_run, skip_gemini=False)
+    except Exception as exc:
+        print(f"拡張収集をスキップ: {exc}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="関東の公開ロケ地・ロケ弁をスプレッドシートへ差分追記する")
     parser.add_argument("--limit", type=int, default=MAX_RECORDS, help="1回で追記する最大件数")
     parser.add_argument("--pause", type=float, default=PAUSE, help="リクエスト間隔（秒）")
     parser.add_argument("--dry-run", action="store_true", help="収集だけ行い、シートには書かない")
+    parser.add_argument("--skip-drama", action="store_true", help="ドラマ/FC拡張収集をスキップ")
     args = parser.parse_args()
     if args.limit < 1:
         raise SystemExit("--limit は 1 以上にしてください")
@@ -571,6 +628,8 @@ def main():
     if args.dry_run:
         for row in rows:
             print("\t".join(row))
+        if not args.skip_drama:
+            run_drama_expansion(min(args.limit, 40), True)
         return
     fresh = fresh_rows(rows, known_names)
     added = append_batches(worksheet, fresh)
@@ -581,6 +640,8 @@ def main():
     except Exception as exc:
         print(f"未解決クエリの更新をスキップ: {exc}")
     print(f"追記 {added} 件（{SHEET_BATCH} 件ずつ、既存の名称はスキップ）")
+    if not args.skip_drama:
+        run_drama_expansion(min(args.limit, 80), False)
 
 
 if __name__ == "__main__":

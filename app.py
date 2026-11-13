@@ -152,9 +152,11 @@ FLAGSHIPS = (
 SYSTEM_INSTRUCTION = """
 あなたは映像制作会社 株式会社ALMONDBAGGERのAI制作アシスタント『YUMI-CHA』です。映画・ドラマ・CM・MVの制作部現場を20年以上支えてきたベテランの知見と、Google Gemini本来の洗練された知性・論理的思考を持っています。
 
-・トーン：20年間の現場の汗、判断、知恵を叩き込まれた、頼れるベテラン制作部チーフとして答える。無機質な検索結果で終わらせず、先輩が横で一言足すように、現場で本当に困る点を自然に添える。結論ファースト。余計な自分語りや長い前置きはしない。
+・トーン：現場を一緒に回してきた製作部の先輩として、自然な話し言葉で答える。機械的な箇条書きや定型の「〜でございます」だけで終わらせない。結論を先に置き、そのあと「ここだけ先に押さえて」と次の一手を短く添える。余計な自分語りや長い前置きはしない。
 ・相談・文章作成時：道路使用許可のコツ、挨拶文の作成、段取りの悩みに対して、プロの制作部視点から具体的で無駄のないアドバイスや、コピペしやすいフォーマットを即座に提示する。コードフェンスは使わない。
 ・ロケ地相談時：撮影日、未解禁を含む作品名、俳優名、撮影実績には触れない。個人の自宅は出さない。案内はロケ地（施設・店舗・公園の正式名称）、住所（都道府県と市区町村）、シーン（取調室、屋上対峙、オフィス会議のような状況名）、条件だけ。シーンが特定できなければ「汎用撮影」。特徴の長文は書かない。新宿区・港区のような行政区名だけを施設名にしない。
+・候補を出したあとは、製作部目線で次を自然に一言足す：ロケバスの停車・待機、許可のリードタイム、電源・控え室・トイレ、近隣のケータリングやお弁当。実データにあることだけ言い、無い数字は作らない。
+・実データに【LINE・現場メモ】【文章ナレッジ】【現場実務・業者ナレッジ】があるときは、その言い回し・トラブル対応・共有事項を優先して織り込む。情報元があるときは「現場メモでは〜」「台帳では〜」と自然に触れてよい。URLそのものは書かない。
 ・「該当する実データはございません」「施設データはございません」「記録がありません」など、候補が無いと終わる返答は禁止。
 ・ロケ地の一覧はアプリが箇条書きにする。JSON、配列、{"name": ...} は絶対に書かない。
 ・1施設の条件やシーンを聞かれたら、その施設だけを文章で答える。撮影受入条件（土日祝、夜間、事前申請）と、向いているシーン、搬入の要点を書く。作品名、撮影日、URLは書かない。
@@ -167,7 +169,7 @@ SYSTEM_INSTRUCTION = """
 ### 【YUMI-CHA 制作現場ブレインOS】
 住所やスペックのあとに、搬入の段差と車高制限、発電機・ジェネ車の位置、近隣への光と音、警察への道路使用許可、冷めても美味いロケ弁、ゴミ回収の有無を、先輩のアドバイスとして添える。実データにない料金、最低注文数、その施設だけの数字は作らない。施設を1行で並べるときは、行の形式を崩して架空の施設にしない。助言は一覧の前後に短く置く。爆破・公道の完全封鎖・カースタントのガードレールが該当する質問では、この節よりガードレールを優先し、候補地は出さない。
 
-・ロケ地：住所と、台帳にある料金・条件を先に出す。必ず搬入の注意を添える。車高2.1m制限、クランク角、段差、貨物用エレベーター、ジェネ車を置ける位置。必ず近隣対策を添える。音と光は、直近4軒への挨拶を先に置く。
+・ロケ地：住所と、台帳にある料金・条件を先に出す。必ず搬入の注意を添える。車高2.1m制限、クランク角、段差、貨物用エレベーター、ジェネ車を置ける位置。必ず近隣対策を添える。音と光は、直近4軒への挨拶を先に置く。ロケバスの待機と乗降位置、許可の中7〜10実働日、控え室・トイレ・電源も、分かる範囲で一言足す。
 ・お弁当：価格帯のあとに、早朝配達（朝6時など）、冷めても旨いおかず、ゴミ回収の要否を添える。台帳にない最低個数は作らない。
 ・制作進行・申請：所轄警察署交通課の申請デッドラインは中7日〜10実働日。作業帯図はミリ単位で作る。移動は45分のバッファを見る。
 
@@ -2317,7 +2319,11 @@ def ask_gemini(
             "作品名の全文は書かない。1行の中に次の候補を続けない。"
         )
     elif not task:
-        task = "実データの一覧は渡していない。施設名や店名を作って候補として出さない。相談、挨拶、文章作成には直接答える。"
+        task = (
+            "実データの一覧は渡していない。施設名や店名を作って候補として出さない。"
+            "相談、挨拶、文章作成には、製作部の先輩として自然な話し言葉で直接答える。"
+            "次に確認すべき許可・車両・控え室・弁当があれば一文で提案する。"
+        )
     shown = facts or "（なし）"
     try:
         shown = attach_reference(shown, user_text)
@@ -3930,6 +3936,17 @@ def writing_knowledge_cue_lines(query: str, terms: list[str] | None = None) -> l
     return lines
 
 
+def line_field_cue_lines(query: str) -> list[str]:
+    try:
+        import line_field_knowledge
+    except Exception:
+        return []
+    try:
+        return list(line_field_knowledge.cue_lines(query, limit=8) or [])
+    except Exception:
+        return []
+
+
 def hybrid_context(query: str) -> str:
     raw = query or ""
     try:
@@ -3939,6 +3956,13 @@ def hybrid_context(query: str) -> str:
         return ""
     terms = cue_terms(raw)
     blocks = []
+    # LINE・現場メモは製作部の一次情報として最優先で添える
+    try:
+        lines = line_field_cue_lines(raw)
+        if lines:
+            blocks.append("【LINE・現場メモ】\n" + "\n".join(lines))
+    except Exception:
+        pass
     if terms:
         try:
             lines = location_cue_lines(raw, terms)
@@ -5213,6 +5237,7 @@ def apply_theme():
     .st-key-composer {
         bottom: 20px;
         width: min(760px, calc(100vw - 40px));
+        max-width: calc(100vw - 24px);
         margin: 0;
         padding: 8px 10px;
         border-radius: 999px;
@@ -5221,51 +5246,91 @@ def apply_theme():
         -webkit-backdrop-filter: none;
         border: 1px solid rgba(148, 163, 184, 0.45);
         box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
+        box-sizing: border-box;
+        overflow: hidden;
     }
     .st-key-composer:focus-within {
         border-color: #ef4444;
         box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12), 0 0 0 3px rgba(239, 68, 68, 0.22);
     }
     .st-key-composer [data-testid="stHorizontalBlock"] {
+        display: flex !important;
         align-items: center !important;
-        gap: 6px !important;
+        justify-content: flex-start !important;
+        flex-wrap: nowrap !important;
+        gap: 8px !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+    .st-key-composer [data-testid="stHorizontalBlock"] > div {
+        display: flex !important;
+        align-items: center !important;
+        min-width: 0 !important;
+    }
+    .st-key-composer [data-testid="stHorizontalBlock"] > div:first-child {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+    }
+    .st-key-composer [data-testid="stHorizontalBlock"] > div:not(:first-child) {
+        flex: 0 0 44px !important;
+        width: 44px !important;
+        max-width: 44px !important;
+        justify-content: center !important;
     }
     .st-key-composer [data-testid="stVerticalBlock"],
     .st-key-composer [data-testid="stElementContainer"] {
         margin-bottom: 0 !important;
         gap: 0 !important;
+        width: 100% !important;
     }
     .st-key-composer [data-testid="stForm"] {
         position: relative !important;
         display: block !important;
+        width: 100% !important;
         border: none; padding: 0; background: transparent; overflow: visible;
     }
     .st-key-composer [data-testid="stForm"] [data-testid="stVerticalBlock"] {
-        display: grid !important;
-        grid-template-columns: 1fr;
-        height: 52px;
-        min-height: 52px;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: stretch !important;
+        gap: 8px !important;
+        width: 100% !important;
+        min-height: 48px;
+        height: 48px;
     }
     .st-key-composer [data-testid="stForm"] [data-testid="stVerticalBlock"] > .stElementContainer {
-        grid-area: 1 / 1;
-        align-self: center;
-        width: 100% !important;
         margin: 0 !important;
+        height: 48px !important;
+        display: flex !important;
+        align-items: center !important;
+    }
+    .st-key-composer [data-testid="stForm"] [data-testid="stVerticalBlock"] > .stElementContainer:first-child {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        width: auto !important;
     }
     .st-key-composer [data-testid="stForm"] [data-testid="stVerticalBlock"] > .stElementContainer:last-child {
-        justify-self: end;
-        align-self: center;
-        width: 84px !important;
-        height: 36px !important;
-        margin: 0 8px 0 0 !important;
+        flex: 0 0 76px !important;
+        width: 76px !important;
+        max-width: 76px !important;
+        justify-content: center !important;
         z-index: 5;
     }
-    .st-key-composer [data-testid="stTextInput"] { margin-bottom: 0; }
+    .st-key-composer [data-testid="stTextInput"] {
+        margin-bottom: 0;
+        width: 100% !important;
+    }
+    .st-key-composer [data-testid="stTextInput"] > div {
+        width: 100% !important;
+    }
     .st-key-composer [data-testid="stTextInput"] [data-testid="InputInstructions"] { display: none !important; }
     .st-key-composer [data-testid="stTextInput"] input {
-        height: 52px; border-radius: 999px !important;
+        height: 48px !important;
+        min-height: 48px !important;
+        border-radius: 999px !important;
         border: 1px solid rgba(148, 163, 184, 0.45) !important;
-        padding: 0 100px 0 20px !important;
+        padding: 0 18px !important;
         background: #ffffff !important;
         background-color: #ffffff !important;
         color: #111827 !important;
@@ -5273,6 +5338,9 @@ def apply_theme():
         caret-color: #111827;
         box-shadow: none;
         font-size: 15px !important;
+        line-height: 48px !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
     }
     .st-key-composer [data-testid="stTextInput"] input::placeholder {
         color: #6b7280 !important;
@@ -5288,19 +5356,35 @@ def apply_theme():
     .st-key-composer [data-testid="stFormSubmitButton"] {
         position: relative !important;
         width: 76px !important;
-        height: 36px !important;
+        height: 48px !important;
         margin: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
         z-index: 5;
     }
     .st-key-composer [data-testid="stFormSubmitButton"] button {
-        width: 76px !important; min-width: 76px; height: 36px !important;
-        min-height: 36px !important;
-        border-radius: 999px !important; background: #c4161c !important; color: #fff !important;
-        border: none !important; font-weight: 700 !important; padding: 0 14px !important;
+        width: 76px !important;
+        min-width: 76px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        border-radius: 999px !important;
+        background: #c4161c !important;
+        color: #fff !important;
+        border: none !important;
+        font-weight: 700 !important;
+        padding: 0 14px !important;
         margin: 0 !important;
-        transform: translateY(8px);
+        transform: none !important;
+        line-height: 1 !important;
     }
-    .st-key-composer iframe { height: 44px !important; border: none !important; background: transparent !important; }
+    .st-key-composer iframe {
+        height: 44px !important;
+        width: 44px !important;
+        border: none !important;
+        background: transparent !important;
+        display: block !important;
+    }
     .st-key-image_pop [data-testid="stPopover"] > button,
     .st-key-play_cm button {
         width: 44px !important; height: 44px !important; min-height: 44px !important;
@@ -5308,6 +5392,7 @@ def apply_theme():
         border: 1px solid #e6ebf0 !important; background: #fff !important; color: #4b5563 !important;
         box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06) !important;
         font-size: 0 !important;
+        margin: 0 !important;
     }
     .st-key-image_pop [data-testid="stPopover"] > button p,
     .st-key-play_cm button p { display: none !important; }
@@ -5330,7 +5415,7 @@ def apply_theme():
     }
     [data-testid="stChatInput"] { display: none; }
     @media (max-width: 768px) {
-        .block-container { padding-left: 12px !important; padding-right: 12px !important; padding-bottom: 190px !important; }
+        .block-container { padding-left: 12px !important; padding-right: 12px !important; padding-bottom: 210px !important; }
         .catch { font-size: 15px !important; line-height: 1.55; }
         .ext-row { flex-direction: column; align-items: stretch; width: 100%; }
         a.ext { width: 100%; min-width: 0; box-sizing: border-box; }
@@ -5338,14 +5423,14 @@ def apply_theme():
         .st-key-composer,
         .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-suggest,
         .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-composer {
-            left: 10px !important;
-            right: 10px !important;
+            left: 8px !important;
+            right: 8px !important;
             width: auto !important;
             max-width: none !important;
             transform: none !important;
         }
         .st-key-suggest {
-            bottom: 148px;
+            bottom: 156px;
             overflow-x: auto;
             overflow-y: hidden;
             -webkit-overflow-scrolling: touch;
@@ -5356,10 +5441,16 @@ def apply_theme():
             min-width: 100%;
         }
         .st-key-suggest button { white-space: nowrap !important; width: auto !important; }
-        .st-key-composer { bottom: 10px; border-radius: 22px; padding: 8px; }
+        .st-key-composer {
+            bottom: 8px;
+            border-radius: 22px;
+            padding: 8px;
+            overflow: visible;
+        }
         .st-key-composer [data-testid="stHorizontalBlock"] {
             display: flex !important;
             flex-wrap: wrap !important;
+            align-items: center !important;
             width: 100% !important;
             gap: 8px !important;
         }
@@ -5368,17 +5459,29 @@ def apply_theme():
             width: 100% !important;
             max-width: 100% !important;
             min-width: 0 !important;
+            order: 1;
         }
         .st-key-composer [data-testid="stHorizontalBlock"] > div:not(:first-child) {
-            flex: 0 0 48px !important;
-            width: 48px !important;
-            max-width: 48px !important;
-            min-width: 48px !important;
+            flex: 0 0 44px !important;
+            width: 44px !important;
+            max-width: 44px !important;
+            min-width: 44px !important;
+            order: 2;
+        }
+        .st-key-composer [data-testid="stForm"] [data-testid="stVerticalBlock"] {
+            height: 48px !important;
+            min-height: 48px !important;
         }
         .st-key-composer [data-testid="stTextInput"] input {
             width: 100% !important;
             font-size: 16px !important;
-            padding: 0 92px 0 14px !important;
+            padding: 0 14px !important;
+            height: 48px !important;
+        }
+        .st-key-composer [data-testid="stFormSubmitButton"],
+        .st-key-composer [data-testid="stFormSubmitButton"] button {
+            height: 40px !important;
+            min-height: 40px !important;
         }
     }
     .st-key-prod_tools {

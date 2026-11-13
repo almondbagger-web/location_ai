@@ -5,6 +5,7 @@ gmail_credentials.json
 gmail_credentials.json.json
 gmail_token.json
 processed_gmail_ids.json
+collected_drama_urls.txt
 locations_master.db
 *.db
 *.db-wal
