@@ -287,11 +287,18 @@ def short_error(exc: Exception) -> str:
         return "パスワード付きのためスキップ"
     if "python-docx" in text:
         return "Wordを読む部品がありません"
+    if "401" in text or "unauthenticated" in lowered or "account_state_invalid" in lowered:
+        return "Gemini APIキーが無効です。.env の GEMINI_API_KEY を新しいキーに差し替えてください"
     if "429" in text or "RESOURCE_EXHAUSTED" in text:
         return "通信が混み合っているため、次回に回します"
     if "credentials" in lowered or "oauth" in lowered:
         return "Gmail認証に失敗しました"
     return "読めなかったためスキップ"
+
+
+def is_gemini_auth_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "401" in text or "unauthenticated" in text or "account_state_invalid" in text
 
 
 def default_query(days: int) -> str:
@@ -1268,6 +1275,9 @@ def run(query: str, dry_run: bool, limit: int) -> int:
             locations, dressing, bento, notes, writing, truncated = analyze_text(client, text, origin)
         except Exception as exc:
             print(f"  解析失敗（{short_error(exc)}）")
+            if is_gemini_auth_error(exc):
+                print("Gemini認証エラーのため、ここで中断します。キー更新後に同じコマンドを再実行してください。")
+                return 1
             continue
         print(
             f"  抽出: ロケ地{len(locations)}件 / 控室{len(dressing)}件 / 弁当{len(bento)}件"
