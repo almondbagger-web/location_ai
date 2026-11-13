@@ -291,7 +291,9 @@ def short_error(exc: Exception) -> str:
         return "Gemini APIキーが無効です。.env の GEMINI_API_KEY を新しいキーに差し替えてください"
     if "403" in text or "permission_denied" in lowered or "consumer_suspended" in lowered:
         return "Geminiのプロジェクトが停止または権限不足です。別プロジェクトの有効な API キーに差し替えてください"
-    if "429" in text or "RESOURCE_EXHAUSTED" in text:
+    if "402" in text or "prepayment credits are depleted" in lowered or "prepay" in lowered:
+        return "Geminiの前払いクレジットが不足しています。AI Studioで請求・クレジットを確認してください"
+    if "429" in text or ("resource_exhausted" in lowered and "402" not in text):
         return "通信が混み合っているため、次回に回します"
     if "credentials" in lowered or "oauth" in lowered:
         return "Gmail認証に失敗しました"
@@ -302,11 +304,14 @@ def is_gemini_auth_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return (
         "401" in text
+        or "402" in text
         or "403" in text
         or "unauthenticated" in text
         or "permission_denied" in text
         or "account_state_invalid" in text
         or "consumer_suspended" in text
+        or "prepayment credits are depleted" in text
+        or "prepay" in text
     )
 
 
