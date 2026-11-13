@@ -2492,10 +2492,18 @@ def document_reply(user_text: str, messages: list[dict] | None = None) -> tuple[
     task = (
         "これは完成文面の依頼。解説は2文まで。空行のあと、貼って使える完成文面だけを続ける。"
         "近隣挨拶、スタッフ注意、警察協議メモ、交渉文のどれか、質問に合う型にする。"
+        "実データに【文章ナレッジ】があるときは、その件名例・本文テンプレート・交渉ポイントを優先して整える。"
         "空欄は〔　〕のまま。電話番号とURLは作らない。個人の自宅は書かない。"
         "爆破、公道の完全封鎖、カースタントなら文面を作らず、特殊撮影は窓口相談だとだけ書く。"
     )
-    spoken = ask_gemini(user_text, messages or [], None, None, "", task, True)
+    facts = ""
+    try:
+        lines = writing_knowledge_cue_lines(user_text)
+        if lines:
+            facts = "【文章ナレッジ】\n" + "\n".join(lines)
+    except Exception:
+        facts = ""
+    spoken = ask_gemini(user_text, messages or [], None, None, facts, task, True)
     body = spoken or document_skeleton(user_text)
     parts = body.split("\n", 1)
     if len(parts) > 1 and parts[1].strip():
@@ -3452,6 +3460,8 @@ FIELD_VENDOR_SHEET = "現場実務・業者ナレッジ"
 FIELD_VENDOR_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 BENTO_SHEET = "お弁当"
 BENTO_SHEET_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
+WRITING_KNOWLEDGE_SHEET = "文章ナレッジ"
+WRITING_KNOWLEDGE_CACHE: dict[str, object] = {"at": 0.0, "rows": []}
 QUERY_SHEET_NAME = "未解決クエリ"
 
 
@@ -3462,6 +3472,50 @@ def field_vendor_csv_url() -> str:
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet="
         + quote(FIELD_VENDOR_SHEET)
     )
+
+
+def writing_knowledge_csv_url() -> str:
+    from urllib.parse import quote
+
+    return (
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet="
+        + quote(WRITING_KNOWLEDGE_SHEET)
+    )
+
+
+def refresh_writing_knowledge_rows() -> None:
+    import time
+
+    now = time.monotonic()
+    cached = list(WRITING_KNOWLEDGE_CACHE.get("rows") or [])
+    age = now - float(WRITING_KNOWLEDGE_CACHE.get("at") or 0)
+    if WRITING_KNOWLEDGE_CACHE.get("at") and age < (1800 if cached else 180):
+        return
+    table: list[list[str]] = []
+    try:
+        table = read_csv_table(writing_knowledge_csv_url())
+    except Exception:
+        table = []
+    if len(table) <= 1:
+        try:
+            book = open_master_book()
+            if book is not None:
+                table = book.worksheet(WRITING_KNOWLEDGE_SHEET).get_all_values() or []
+        except Exception:
+            table = table or []
+    rows: list[dict[str, str]] = []
+    if table:
+        header = [str(cell or "").strip() or f"col{index}" for index, cell in enumerate(table[0])]
+        for cells in table[1:]:
+            if not any(str(cell or "").strip() for cell in cells):
+                continue
+            item = {}
+            for index, key in enumerate(header):
+                item[key] = csv_cell(cells, index)
+            if any(item.values()):
+                rows.append(item)
+    WRITING_KNOWLEDGE_CACHE["rows"] = rows
+    WRITING_KNOWLEDGE_CACHE["at"] = now
 
 
 def refresh_field_vendor_rows() -> None:
@@ -3807,6 +3861,75 @@ def vendor_cue_lines(query: str, terms: list[str]) -> list[str]:
     return lines
 
 
+def wants_writing_knowledge(query: str) -> bool:
+    raw = query or ""
+    try:
+        if is_document_query(raw):
+            return True
+    except Exception:
+        pass
+    return bool(
+        re.search(
+            r"メール|文面|挨拶|打診|交渉|申請|発注|集合案内|テンプレ|雛形|お願い文|お知らせ",
+            raw,
+        )
+    )
+
+
+def writing_knowledge_cue_lines(query: str, terms: list[str] | None = None) -> list[str]:
+    rows: list[dict] = []
+    try:
+        refresh_writing_knowledge_rows()
+        rows = list(WRITING_KNOWLEDGE_CACHE.get("rows") or [])
+    except Exception:
+        rows = []
+    if not rows:
+        return []
+    raw = query or ""
+    terms = list(terms or cue_terms(raw))
+    ranked = []
+    seen = set()
+    for row in rows:
+        scene = str(row.get("用途・シーン") or row.get("用途") or "").strip()
+        subject = str(row.get("件名例") or row.get("件名") or "").strip()
+        body = str(row.get("本文テンプレート") or row.get("本文") or "").strip()
+        tips = str(row.get("交渉・配慮のポイント") or row.get("ポイント") or "").strip()
+        if not scene and not body:
+            continue
+        blob = " ".join((scene, subject, body, tips))
+        score = cue_score(blob, scene or subject, terms, raw) if terms else 0
+        if wants_writing_knowledge(raw):
+            for marker, boost in (
+                ("挨拶", 4),
+                ("交渉", 4),
+                ("許可", 3),
+                ("弁当", 3),
+                ("発注", 3),
+                ("集合", 3),
+                ("打診", 3),
+                ("申請", 3),
+                ("注意", 2),
+            ):
+                if marker in raw and marker in blob:
+                    score += boost
+            if score <= 0 and wants_writing_knowledge(raw):
+                score = 1
+        if score <= 0:
+            continue
+        key = re.sub(r"\s+", "", f"{scene}|{subject}|{body[:40]}")
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append((score, scene, subject, body[:360], tips[:160]))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    lines = []
+    for _score, scene, subject, body, tips in ranked[:8]:
+        bits = [part for part in (scene, f"件名例: {subject}" if subject else "", body, f"ポイント: {tips}" if tips else "") if part]
+        if bits:
+            lines.append("- " + " / ".join(bits))
+    return lines
+
+
 def hybrid_context(query: str) -> str:
     raw = query or ""
     try:
@@ -3815,44 +3938,50 @@ def hybrid_context(query: str) -> str:
     except Exception:
         return ""
     terms = cue_terms(raw)
-    if not terms:
-        return ""
     blocks = []
+    if terms:
+        try:
+            lines = location_cue_lines(raw, terms)
+            if lines:
+                blocks.append("【ロケ地】\n" + "\n".join(lines))
+        except Exception:
+            pass
+        try:
+            lines = bento_cue_lines(raw, terms)
+            if lines:
+                blocks.append("【お弁当】\n" + "\n".join(lines))
+        except Exception:
+            pass
+        try:
+            lines = vendor_cue_lines(raw, terms)
+            if lines:
+                blocks.append("【現場実務・業者ナレッジ】\n" + "\n".join(lines))
+        except Exception:
+            pass
+        try:
+            if csv_location_index is not None:
+                past = []
+                for row in csv_location_index.search_flexible(raw, CUE_CAP):
+                    bits = [str(row.get("name") or "")]
+                    if row.get("address"):
+                        bits.append(str(row.get("address") or ""))
+                    scene = str(row.get("scene") or "")[:40]
+                    if scene:
+                        bits.append(scene)
+                    work = brief_source(str(row.get("work") or ""))
+                    if work:
+                        bits.append(f"使用実績: {work}")
+                    if bits[0]:
+                        past.append("- " + " / ".join(bit for bit in bits if bit))
+                if past:
+                    blocks.append("【参考過去ロケ実績】\n" + "\n".join(past))
+        except Exception:
+            pass
     try:
-        lines = location_cue_lines(raw, terms)
-        if lines:
-            blocks.append("【ロケ地】\n" + "\n".join(lines))
-    except Exception:
-        pass
-    try:
-        lines = bento_cue_lines(raw, terms)
-        if lines:
-            blocks.append("【お弁当】\n" + "\n".join(lines))
-    except Exception:
-        pass
-    try:
-        lines = vendor_cue_lines(raw, terms)
-        if lines:
-            blocks.append("【現場実務・業者ナレッジ】\n" + "\n".join(lines))
-    except Exception:
-        pass
-    try:
-        if csv_location_index is not None:
-            past = []
-            for row in csv_location_index.search_flexible(raw, CUE_CAP):
-                bits = [str(row.get("name") or "")]
-                if row.get("address"):
-                    bits.append(str(row.get("address") or ""))
-                scene = str(row.get("scene") or "")[:40]
-                if scene:
-                    bits.append(scene)
-                work = brief_source(str(row.get("work") or ""))
-                if work:
-                    bits.append(f"使用実績: {work}")
-                if bits[0]:
-                    past.append("- " + " / ".join(bit for bit in bits if bit))
-            if past:
-                blocks.append("【参考過去ロケ実績】\n" + "\n".join(past))
+        if terms or wants_writing_knowledge(raw):
+            lines = writing_knowledge_cue_lines(raw, terms)
+            if lines:
+                blocks.append("【文章ナレッジ】\n" + "\n".join(lines))
     except Exception:
         pass
     return "\n\n".join(blocks)
